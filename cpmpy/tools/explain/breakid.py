@@ -15,6 +15,8 @@ from cpmpy.transformations.decompose_global import decompose_in_tree
 from cpmpy.transformations.reification import reify_rewrite, only_implies, only_bv_reifies
 from cpmpy.transformations.comparison import only_numexpr_equality
 from cpmpy.transformations.linearize import linearize_constraint, only_positive_bv
+from cpmpy.transformations.safening import no_partial_functions
+from cpmpy.transformations.int2bool import _decide_encoding, _encode_int_var, int2bool
 
 from cpmpy.expressions.variables import _NumVarImpl, _BoolVarImpl, NegBoolView
 from cpmpy.expressions.core import Comparison, Operator
@@ -382,6 +384,7 @@ class BreakID:
         constraints = only_implies(constraints)  # anything that can create full reif should go above...
         constraints = linearize_constraint(constraints, supported=frozenset({"sum", "wsum"}))  # the core of the MIP-linearization
         constraints = only_positive_bv(constraints)
+        constraints = int2bool(constraints)
 
         def format_comparison(cons):
 

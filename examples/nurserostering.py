@@ -256,32 +256,93 @@ def nurserostering_model(horizon, shifts:pd.DataFrame, staff, days_off, shift_on
 if __name__ == "__main__":
 
     dataset = NurseRosteringDataset(root=".", download=True, transform=parse_scheduling_period)
-    print("Dataset size:", len(dataset))
-    data, metadata = dataset[1]
 
-    for key, value in data.items():
-        print(key,":")
-        print(value)
+    for i in range(len(dataset)):
+        data, metadata = dataset[i]
 
-    model, nurse_view = nurserostering_model(**data)
-    assert model.solve()
+        for key, value in data.items():
+            print(key,":")
+            print(value)
 
-    print(f"Found optimal solution with penalty of {model.objective_value()}")
+        model, nurse_view = nurserostering_model(**data)
+        assert model.solve()
 
-    # pretty print solution
-    names = ["-"] + data['shifts'].index.tolist()
-    sol = nurse_view.value()
-    df = pd.DataFrame(sol, index=data['staff'].name).map(names.__getitem__)
+        print(f"Found optimal solution with penalty of {model.objective_value()}")
 
-    for shift, _ in data['shifts'].iterrows():
-        df.loc[f'Cover {shift}'] = ""
+        # pretty print solution
+        names = ["-"] + data['shifts'].index.tolist()
+        sol = nurse_view.value()
+        df = pd.DataFrame(sol, index=data['staff'].name).map(names.__getitem__)
 
-    for _, cover_request in data['cover'].iterrows():
-        shift = cover_request['ShiftID']
-        num_shifts = sum(df[cover_request['Day']] == shift)
-        df.loc[f"Cover {shift}",cover_request['Day']] = f"{num_shifts}/{cover_request['Requirement']}"
+        for shift, _ in data['shifts'].iterrows():
+            df.loc[f'Cover {shift}'] = ""
 
-    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    df.columns = [days[(int(col)) % 7] for col in df.columns]
+        for _, cover_request in data['cover'].iterrows():
+            shift = cover_request['ShiftID']
+            num_shifts = sum(df[cover_request['Day']] == shift)
+            df.loc[f"Cover {shift}",cover_request['Day']] = f"{num_shifts}/{cover_request['Requirement']}"
 
-    print(df.to_markdown())
+        days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        df.columns = [days[(int(col)) % 7] for col in df.columns]
+
+        print(df.to_markdown())
+        
+        from cpmpy.tools.explain import mus
+        assert model.solve()
+        sol = nurse_view.value()
+        opt_val = model.objective_value()
+        print("Objective value:",opt_val)
+
+        instance = metadata['name']
+
+        import copy
+        import pickle
+
+        for i, row in enumerate(nurse_view):
+            print(f"Testing alternative assignments for {data['staff'].iloc[i]['name']}")
+            for j, x in enumerate(row):
+                for v in range(x.lb, x.ub+1):
+                    if sol[i,j] == v: continue
+                    print(f"\tResult of asserting {x == v}:", end="\t")
+                    alt_model = copy.deepcopy(model)
+                    alt_model += nurse_view[i,j] == v
+                    
+                    if alt_model.solve():
+                        current_obj_val = alt_model.objective_value()
+                        
+                        if current_obj_val == opt_val:
+                            print("Alternative solution with equal objective.")
+                        
+                        else: # The solution is worse than the optimal value
+                            print(f"Results in worse solution ({current_obj_val})", end="\t")
+                            
+                            # ----------------------------------------------------
+                            # 1. ADD THE CONSTRAINT THAT MAKES IT UNSAT IF YOU WANT TO RUN MUS
+                            cons = alt_model.objective_ == opt_val
+                            cons.set_description("Restrict objective")
+                            alt_model += cons
+                            
+                            # 2. SAVE THE MODEL USING PICKLE
+                            # You may want to use a unique filename (e.g., based on i and j)
+                            try:
+                                pickle_path = f"/home/orestis_ubuntu/work/cpmpyfork/cp-mus-bench/{instance}-{i}-{j}-{v}.pkl"
+                                with open(pickle_path, 'wb') as f:
+                                    pickle.dump(alt_model, f)
+                                print(f"(Saved model to {pickle_path})")
+                            except Exception as e:
+                                print(f"Error saving model: {e}")
+                            
+                            # print("MUS size:", len(mus(alt_model.constraints, solver="exact")))
+                            # ----------------------------------------------------
+                    
+                    else: # UNSAT case
+                        print("UNSAT", end="\t")
+                        # If you want to run MUS analysis on the UNSAT core, you could also save here
+                        try:
+                            pickle_path = f"/home/orestis_ubuntu/work/cpmpyfork/cp-mus-bench/{instance}-{i}-{j}-{v}.pkl"
+                            with open(pickle_path, 'wb') as f:
+                                pickle.dump(alt_model, f)
+                            print(f"(Saved model to {pickle_path})")
+                        except Exception as e:
+                            print(f"Error saving model: {e}")
+                        # print("MUS size:",len(mus(alt_model.constraints, solver="exact")))
