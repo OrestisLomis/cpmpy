@@ -29,7 +29,7 @@ C_WALLS = np.array([[1,1,1,1,1],
                     [1,1,1,1,1],
                     [0,0,0,1,1]])
 
-# all reachable primes for 6 different sudoku digits
+# all reachable primes when summing 2 digits in range [1,6] or when summing 6 different digits in range [1,6]
 PRIMES = [2,3,5,7,11,13,17,19]
 
 def get_reachable_neighbours(row, column):
@@ -69,9 +69,9 @@ def path_valid(path):
                 neighbours = get_reachable_neighbours(r, c)
 
                 # for any pathcell, the next pathcell must always be reachable
-                constraints.append((path[r,c] != 0).implies(cp.any([path[*neighbour] == path[r,c] + 1 for neighbour in neighbours])))
+                constraints.append((path[r,c] != 0).implies(cp.any([path[neighbour[0], neighbour[1]] == path[r,c] + 1 for neighbour in neighbours])))
                 # the two must also have a prime sum
-                constraints.append(cp.all([cp.any([((path[r,c] != 0) & (path[r,c] + 1 == path[*neighbour])).implies(cells[r,c] + cells[*neighbour] == p) for p in PRIMES]) for neighbour in neighbours]))
+                constraints.append(cp.all([cp.any([((path[r,c] != 0) & (path[r,c] + 1 == path[neighbour[0], neighbour[1]])).implies(cells[r,c] + cells[neighbour[0], neighbour[1]] == p) for p in PRIMES]) for neighbour in neighbours]))
 
     return constraints
 
@@ -110,7 +110,6 @@ def regroup_to_blocks(grid):
 
 
 blocks = regroup_to_blocks(cells)
-print(blocks)
 path_blocks = regroup_to_blocks(path)
 
 for i in range(cells.shape[0]):
@@ -119,13 +118,8 @@ for i in range(cells.shape[0]):
     m += cp.AllDifferent(blocks[i])
     m += prime_block(blocks[i], path_blocks[i])
 
-print(cells)
-print(path)
-
-print(m)
-print(f"The model contains {len(m.constraints)} constraints")
-
 sol = m.solve()
-print(m.status())
+print("The solution is:")
 print(cells.value())
+print("The path is (0 if not on the path):")
 print(path.value())

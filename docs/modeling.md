@@ -4,11 +4,21 @@ This page explains and demonstrates how to use CPMpy to model and solve combinat
 
 ## Installation
 
-Installation is available through the `pip` Python package manager. This will also install and use `ortools` as default solver (see how to use alternative solvers [here](#selecting-a-solver)):
+Installation is available through the `pip` Python package manager. This will also install and use `ortools` as default solver:
 
 ```commandline
 pip install cpmpy
 ```
+
+Additional solvers can be downloaded as optional dependencies (see how to use alternative solvers [here](#selecting-a-solver)):
+
+```commandline
+pip install cpmpy[gurobi, choco, exact] # installs 3 additional solving backends
+```
+
+An overview of the available backends can be found [here](index.rst#supported-solvers).
+
+CPMpy requires python version  3.8 or higher.
 
 See [installation instructions](./installation_instructions.rst) for more details. 
 
@@ -47,7 +57,7 @@ If you want a **sparse domain**, containing only a few values, you can either de
 
 Decision variables have a **unique name**. You can set it yourself, otherwise a unique name will automatically be assigned. If you print decision variables (`print(b)` or `print(x)`), it will display the name. Did we already say the name <u>must be unique</u>? Many solvers use the name as unique identifier, and it is near-impossible to debug with non-uniquely named decision variables.
 
-A solver will set the **value** of the decision variables for which it solved, if it can find a solution. You can retrieve it with `v.value()`. Variables are not tied to a solver, so you can use the same variable across multiple models and solvers. When a solve call finishes, it will overwrite the value of all its decision variables. Before solving, this value will be `None`. After solving it has either taken a boolean or integer value, or it is still None. For example when the solver didn't find any solution or when the decision variable was never used in the model, i.e. never appeared in a constraint or the objective function (a stale decision variable).
+A solver will set the **value** of the decision variables for which it solved, if it can find a solution. You can retrieve it with `v.value()`. Variables are not tied to a solver, so you can use the same variable across multiple models and solvers. When a solve call finishes, it will overwrite the value of all its decision variables. Before solving, this value will be `None`. After solving it has either taken a boolean or integer value, or it is still None. For example when the solver didn't find any solution or when the decision variable was never used in the model, i.e. a "stale" decision variable which never appeared in a constraint or the objective function.
 
 Finally, by providing a **shape** you automatically create a **numpy n-dimensional array** of decision variables. These variables automatically get their index appended to their name (the name is provided on the array-level) as to ensure its uniqueness:
 
@@ -300,7 +310,7 @@ cp.Model(
     cp.Xor(b, cp.AllDifferent(x)),  # etc...
 )
 ```
-`decompose()` returns two arguments, one that represents the constraints and another that defines any newly created decision variables during the decomposition process. This is technical, but important to make negation work, if you want to know more check the [the API documentation on global constraints](./api/expressions/globalconstraints.rst).
+`decompose()` returns two values, one that represents the constraints and another that defines any newly created decision variables during the decomposition process. This is technical, but important to make negation work, if you want to know more check the [the API documentation on global constraints](./api/expressions/globalconstraints.rst).
 
 #### Global functions
 
@@ -426,7 +436,12 @@ if hassol:
 else:
     print("No solution found.")
 ```
-
+The status of solve-call can be the following:
+1. `ExitStatus.OPTIMAL`: The solver found a solution to an optimisation problem and proved its optimality.
+2. `ExitStatus.FEASIBLE`: The solver found a solution to a satisfaction problem, or a feasible solution to an optimization problem but did not prove optimality
+3. `ExitStatus.UNSATIFIABLE`: The solver proved the input problem is unsatisfiable.
+4. `ExitStatus.UNKNOWN`: The solver did not find a feasible solution, nor proved the problem is unsatisfiable. Can happen when a time-limit is reached.
+5. `ExitStatus.NOT_RUN`: The solver is not run yet (default when initializing a solver)
 
 ## Finding all solutions
 
@@ -440,6 +455,13 @@ m = cp.Model(x[0] > x[1])
 n = m.solveAll()
 print("Nr of solutions:", n)  # Nr of solutions: 6
 ```
+
+The status of solveAll-call can be the following:
+1. `ExitStatus.OPTIMAL`: The solver found all possible solutions to a problem and proved there to be none remaining.
+2. `ExitStatus.FEASIBLE`: The solver found a subset of all solutions, or found all solutions but did not prove there to be none remaining.
+3. `ExitStatus.UNSATIFIABLE`: The solver proved the input problem is unsatisfiable.
+4. `ExitStatus.UNKNOWN`: The solver did not find a feasible solution, nor proved the problem is unsatisfiable. Can happen when a time-limit is reached.
+5. `ExitStatus.NOT_RUN`: The solver is not run yet (default when initializing a solver)
 
 When using `solveAll()`, a solver will use an optimized native implementation behind the scenes when that exists. Otherwise it will be emulated with an iterative approach, resulting in a performance impact.
 
@@ -488,15 +510,72 @@ If that is not sufficient or you want to debug an unexpected (non)solution, have
 
 The default solver is [OR-Tools CP-SAT](https://developers.google.com/optimization), an award winning constraint solver. But CPMpy supports multiple other solvers: a MIP solver (gurobi), SAT solvers (those in PySAT), the Z3 SMT solver, even a knowledge compiler (PySDD) and any CP solver supported by the text-based MiniZinc language.
 
-The list of supported solver interfaces can be found in [the API documentation](./api/solvers.rst).
-See the full list of solvers known by CPMpy with:
 
+
+The list of supported solver interfaces can be found in [the API documentation](./api/solvers.rst) or by using the following:
+
+```python
+import cpmpy as cp
+cp.SolverLookup.base_solvers() # returns a list of tuples, 
+                               # where each tuple is a pair of (<solver name>, <cpmpy solver class>)
+# [('ortools', <class 'cpmpy.solvers.ortools.CPM_ortools'>), ('z3', <class 'cpmpy.solvers.z3.CPM_z3'>), ('minizinc', <class 'cpmpy.solvers.minizinc.CPM_minizinc'>), ('gcs', <class 'cpmpy.solvers.gcs.CPM_gcs'>), ('gurobi', <class 'cpmpy.solvers.gurobi.CPM_gurobi'>), ('pysat', <class 'cpmpy.solvers.pysat.CPM_pysat'>), ('pysdd', <class 'cpmpy.solvers.pysdd.CPM_pysdd'>), ('exact', <class 'cpmpy.solvers.exact.CPM_exact'>), ('choco', <class 'cpmpy.solvers.choco.CPM_choco'>), ('cpo', <class 'cpmpy.solvers.cpo.CPM_cpo'>)]
+```
+
+To get some information on which solvers are currently available on your system, you can make use of our convenient CLI:
+
+```bash
+cpmpy version
+```
+```console
+CPMpy version: 0.9.26
+Solver               Installed  Version        
+--------------------------------------------------
+ortools              Yes        9.12.4544
+z3                   Yes        4.14.1.0       
+minizinc             Yes        0.10.0
+ ↪ cplex             Yes        22.1.2.0
+ ↪ gecode            Yes        6.3.0
+ ↪ cp-sat            Yes        9.12.4544
+ ↪ highs             Yes        1.9.0
+ ↪ chuffed           Yes        0.13.2
+ ↪ coin-bc           Yes        2.10.12/1.17.10
+gcs                  No         -
+gurobi               No         -
+pysat                No         -    
+pysdd                No         -
+exact                Yes        2.1.0
+choco                No         -
+cpo                  No         -
+...                  ...        ...
+```
+
+
+Additionally, we provide programatic access to that same information:
+
+```python
+import cpmpy as cp
+cp.SolverLookup.version() # returns list of per-solver version reports: {name: ..., installed: ..., version: ...}
+# [{'name': 'ortools', 'installed': True, 'version': '9.12.4544'}, {'name': 'pysat', 'installed': True, 'version': '1.8.dev16'}, ...]
+cp.SolverLookup.print_version() # prints 'solver version' table to stdout, same as the CLI
+```
+
+
+Some solvers (like minizinc and pysat) also provide a collection of subsolvers:
+```python
+import cpmpy as cp
+cp.SolverLookup.get('pysat').solvernames()
+# ['cadical103', 'cadical153', 'cadical195', 'gluecard3', 'gluecard4', 'glucose3', 'glucose4', 'glucose42', 'lingeling', 'maplechrono', 'maplecm', 'maplesat', 'mergesat3', 'minicard', 'minisat22', 'minisat-gh']
+```
+
+
+To get a list of all installed solvers (with subsolvers):
 ```python
 import cpmpy as cp
 cp.SolverLookup.solvernames()
 ```
 
 On a system with pysat and minizinc installed, this for example gives `['ortools', 'minizinc', 'minizinc:chuffed', 'minizinc:coin-bc', ..., 'pysat:minicard', 'pysat:minisat22', 'pysat:minisat-gh']`
+
 
 You can specify a solvername when calling `solve()` on a model:
 
@@ -505,10 +584,23 @@ import cpmpy as cp
 x = cp.intvar(0,10, shape=3)
 m = cp.Model(cp.sum(x) <= 5)
 # use named solver
-m.solve(solver="minizinc:chuffed")
+m.solve(solver="minizinc:chuffed") # <solver> or <solver>:<subsolver>
 ```
 
-Note that for solvers other than "ortools", you will need to **install additional package(s)**. You can check if a solver, e.g. "gurobi", is supported by calling `cp.SolverLookup.get("gurobi")` and it will raise a helpful error if it is not yet installed on your system. See [the API documentation](./api/solvers.rst) of the solver for detailed installation instructions.
+You can even use the same model across different solvers to see which one you like best:
+```python
+# m = same model as above
+for solvername in cp.SolverLookup.solvernames() # all solvers (+subsolvers) installed on the system
+    m.solve(solver=solvername)
+    print(m.status())
+```
+
+```{Note}
+For solvers other than "ortools", you will need to **install additional package(s)**. You can check if a solver, e.g. "gurobi", is supported by calling `cp.SolverLookup.get("gurobi")` and it will raise a helpful error if it is not yet installed on your system. See [the API documentation](./api/solvers.rst) of the solver for detailed installation instructions.
+```console
+    Exception: CPM_gurobi: Install the python package 'gurobipy' to use this solver interface.
+```
+
 
 ## Model versus solver interface
 
@@ -537,8 +629,8 @@ On a technical note, remark that a solver object does not modify the Model objec
 
 ## Setting solver parameters
 
-Now lets use our solver-specific powers. 
-For example, with `m` a CPMpy Model(), you can do the following to make OR-Tools use 8 parallel cores and print search progress:
+Now lets use our solver-specific powers.
+For example, with `m` a CPMpy `Model()`, you can do the following to make OR-Tools use 8 parallel cores and print search progress:
 
 ```python
 import cpmpy as cp
@@ -575,7 +667,7 @@ print(s.ort_solver.NumBranches())
 
 Other solvers, like Minizinc, might have other native objects stored.
 You can see which solver native objects are initialized for each solver in [the API documentation](./api/solvers.rst) of the solver.
-We can access the solver statistics from the mzn_result object like this:
+We can access the solver statistics from the `mzn_result` object like this:
 
 ```python
 import cpmpy as cp
@@ -608,11 +700,11 @@ s += sum(ivar) == 3
 s.solve()
 ```
  
-_Technical note_: OR-Tools its model representation is incremental but its solving itself is not (yet?). Gurobi and the PySAT solvers are fully incremental, as is Z3. The text-based MiniZinc language is not incremental.
+_Technical note_: OR-Tools' model representation is incremental but its solving itself is not (yet?). Gurobi and the PySAT solvers are fully incremental, as is Z3. The text-based MiniZinc language is not incremental.
 
 ### Assumption-based solving
 SAT and CP-SAT solvers oftentimes support solving under assumptions, which is also supported by their CPMpy interface.
-Assumption variables are usefull for incremental solving when you want to activate/deactivate different subsets of constraints without copying (parts of) the model or removing constraints and re-solving.
+Assumptions are usefull for incremental solving when you want to activate/deactivate different subsets of constraints without copying (parts of) the model or removing constraints and re-solving.
 By relying on the solver interface directly as in the previous section, the state of the solver is kept in between solve-calls.
 Many explanation-generation algorithms ([see](./api/tools/explain.rst) `cpmpy.tools.explain`) make use of this feature to speed up the solving.
 
@@ -655,16 +747,16 @@ s.solve()
 print(x.value())
 ```
 
-`get_core()` asks the solver for an unsatisfiable core, in case a solution did not exist and assumption variables were used. See the documentation on [Unsat core extraction](./unsat_core_extraction.md).
+`get_core()` asks the solver for an unsatisfiable core, in case a solution did not exist and assumptions were used. See the documentation on [Unsat core extraction](./unsat_core_extraction.md).
 
 See [the API documentation of the solvers](./api/solvers.rst) to learn about their special functions.
 
 
 ## Direct solver access
-Some solvers implement more constraints then available in CPMpy. But CPMpy offers direct access to the underlying solver, so there are two ways to post such solver-specific constraints.
+Some solvers implement more constraints than available in CPMpy. But CPMpy offers direct access to the underlying solver, so there are two ways to post such solver-specific constraints.
 
 ### DirectConstraint
-The `DirectConstraint` will directly call a function of the underlying solver, when the constraint is added to a CPMpy solver. 
+The `DirectConstraint` will directly call a function of the underlying solver  when the constraint is added to a CPMpy solver. 
 
 You provide the DirectConstraint with the name of the function you want to call, as well as the arguments:
 
