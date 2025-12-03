@@ -21,8 +21,11 @@
         
 """
 
+import copy
 import cpmpy as cp
 from cpmpy.transformations.get_variables import get_variables
+from cpmpy.expressions.utils import is_any_list
+from cpmpy.expressions.variables import NegBoolView
 from cpmpy.transformations.normalize import toplevel_list
 
 def make_assump_model(soft, hard=[], name=None):
@@ -814,3 +817,25 @@ def rotate_model_cp(constraints, constraint, depth=None, recursive=True, found=s
     # print(f"Finished rotation at depth {depth}")
 
     return
+def replace_cons_with_assump(cpm_cons, assump_map):
+    """
+        Replace soft constraints with assumption variables in a Boolean CPMpy expression.
+    """
+
+    if is_any_list(cpm_cons):
+        return [replace_cons_with_assump(c, assump_map) for c in cpm_cons]
+    
+    if cpm_cons in assump_map:
+        return assump_map[cpm_cons]
+    
+    elif hasattr(cpm_cons, "args"):
+        cpm_cons = copy.copy(cpm_cons)
+        cpm_cons.update_args(replace_cons_with_assump(cpm_cons.args, assump_map))
+        return cpm_cons
+
+    elif isinstance(cpm_cons, NegBoolView):
+        return ~replace_cons_with_assump(cpm_cons._bv, assump_map)
+    return cpm_cons
+
+class OCUSException(Exception):
+    pass
