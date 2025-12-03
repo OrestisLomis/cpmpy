@@ -625,9 +625,6 @@ def canonical_comparison(lst_of_expr):
                     lhs = Operator("sum", [lhs])
 
             newlist.append(eval_comparison(cpm_expr.name, lhs, rhs))
-        elif isinstance(cpm_expr, _BoolVarImpl):
-            lhs = Operator("wsum", [1, cpm_expr])
-            newlist.append(eval_comparison(">=", lhs, 1))
         else:   # rest of expressions
             newlist.append(cpm_expr)
 
