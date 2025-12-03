@@ -522,6 +522,8 @@ class Benchmark(ABC):
 
             time_parse = time.time()
             model = self.read_instance(instance, open=open)
+            
+            model.objective_ = None
             time_parse = time.time() - time_parse
             
             # model, _, assumps = make_assump_model(model.constraints)

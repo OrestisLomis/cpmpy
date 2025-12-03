@@ -17,6 +17,8 @@ from faker import Faker
 import pandas as pd
 from natsort import natsorted
 
+from cpmpy.tools.explain.mus import mus
+
 pd.set_option('display.max_columns', 500)
 pd.set_option('display.width', 5000)
 
@@ -244,7 +246,7 @@ def nurserostering_model(horizon, shifts:pd.DataFrame, staff, days_off, shift_on
     # Cover constraints, encode in objective with slack variables
     for _, cover_request in cover.iterrows():
         nb_nurses = cp.Count(nurse_view[:, cover_request['Day']], SHIFTS.index(cover_request['ShiftID']))
-        slack_over, slack_under = cp.intvar(0, len(staff), shape=2)
+        slack_over, slack_under = cp.intvar(0, len(staff), shape=2, name=f"slack_{cover_request}")
         model += nb_nurses - slack_over + slack_under == cover_request["Requirement"]
 
         objective += cover_request["Weight for over"] * slack_over + cover_request["Weight for under"] * slack_under
@@ -254,10 +256,14 @@ def nurserostering_model(horizon, shifts:pd.DataFrame, staff, days_off, shift_on
     return model, nurse_view
 
 if __name__ == "__main__":
+    
+    import numpy as np
+    np.random.seed(0)
 
     dataset = NurseRosteringDataset(root=".", download=True, transform=parse_scheduling_period)
 
     for i in range(len(dataset)):
+        print(f"\n\n--- Instance {i}/{len(dataset)} ---")
         data, metadata = dataset[i]
 
         for key, value in data.items():
@@ -265,7 +271,12 @@ if __name__ == "__main__":
             print(value)
 
         model, nurse_view = nurserostering_model(**data)
-        assert model.solve()
+        model.solve(time_limit=600)
+        
+        from cpmpy.solvers.solver_interface import ExitStatus
+        if model.status().exitstatus != ExitStatus.OPTIMAL:
+            print("No optimal solution found")
+            continue
 
         print(f"Found optimal solution with penalty of {model.objective_value()}")
 
@@ -295,54 +306,76 @@ if __name__ == "__main__":
 
         instance = metadata['name']
 
-        import copy
         import pickle
+        
+        count = 0
 
         for i, row in enumerate(nurse_view):
             print(f"Testing alternative assignments for {data['staff'].iloc[i]['name']}")
             for j, x in enumerate(row):
                 for v in range(x.lb, x.ub+1):
                     if sol[i,j] == v: continue
-                    print(f"\tResult of asserting {x == v}:", end="\t")
-                    alt_model = copy.deepcopy(model)
-                    alt_model += nurse_view[i,j] == v
-                    
-                    if alt_model.solve():
-                        current_obj_val = alt_model.objective_value()
+                    rand = np.random.rand()
+                    if rand < 0.05:
+                        print(f"\tResult of asserting {x == v}:", end="\t")
+                        alt_model = cp.Model(model.constraints)
+                        alt_model.minimize(model.objective_)
+                        alt_model += nurse_view[i,j] == v
                         
-                        if current_obj_val == opt_val:
-                            print("Alternative solution with equal objective.")
+                        status = alt_model.solve(time_limit=600)
                         
-                        else: # The solution is worse than the optimal value
-                            print(f"Results in worse solution ({current_obj_val})", end="\t")
+                        if status:
+                            current_obj_val = alt_model.objective_value()
                             
-                            # ----------------------------------------------------
-                            # 1. ADD THE CONSTRAINT THAT MAKES IT UNSAT IF YOU WANT TO RUN MUS
-                            cons = alt_model.objective_ == opt_val
-                            cons.set_description("Restrict objective")
-                            alt_model += cons
+                            if current_obj_val == opt_val:
+                                print("Alternative solution with equal objective.")
                             
-                            # 2. SAVE THE MODEL USING PICKLE
-                            # You may want to use a unique filename (e.g., based on i and j)
+                            else: # The solution is worse than the optimal value
+                                print(f"Results in worse solution ({current_obj_val})", end="\t")
+                                
+                                # ----------------------------------------------------
+                                # 1. ADD THE CONSTRAINT THAT MAKES IT UNSAT IF YOU WANT TO RUN MUS
+                                cons = alt_model.objective_ == opt_val
+                                # cons.set_description("Restrict objective")
+                                alt_model += cons
+                                
+                                # 2. SAVE THE MODEL USING PICKLE
+                                # You may want to use a unique filename (e.g., based on i and j)
+                                try:
+                                    # pickle_path = f"/home/orestis_ubuntu/work/cpmpyfork/cp-mus-bench/{instance}-{i}-{j}-{v}_opt.pkl"
+                                    pickle_path = f"/cw/dtailocal/orestis/benchmarks/2024/nurse-unsat/{instance}-{i}-{j}-{v}_obj.pkl"
+                                    with open(pickle_path, 'wb') as f:
+                                        pickle.dump(alt_model, f)
+                                    print(f"(Saved model to {pickle_path})")
+                                    count += 1
+                                    if count >= 30:
+                                        print("Reached 30 saved instances, moving to next instance.")
+                                        break
+                                except Exception as e:
+                                    print(f"Error saving model: {e}")
+                                
+                                # print("MUS size:", len(mus(alt_model.constraints, solver="exact")))
+                                # ----------------------------------------------------
+                        
+                        elif status is False: # UNSAT case
+                            print("UNSAT", end="\t")
+                            # If you want to run MUS analysis on the UNSAT core, you could also save here
                             try:
-                                pickle_path = f"/home/orestis_ubuntu/work/cpmpyfork/cp-mus-bench/{instance}-{i}-{j}-{v}.pkl"
+                                pickle_path = f"/cw/dtailocal/orestis/benchmarks/2024/nurse-unsat/{instance}-{i}-{j}-{v}.pkl"
+                                # pickle_path = f"/home/orestis_ubuntu/work/cpmpyfork/cp-mus-bench/{instance}-{i}-{j}-{v}.pkl"
                                 with open(pickle_path, 'wb') as f:
                                     pickle.dump(alt_model, f)
                                 print(f"(Saved model to {pickle_path})")
+                                count += 1
+                                if count >= 30:
+                                    print("Reached 30 saved instances, moving to next instance.")
+                                    break
                             except Exception as e:
                                 print(f"Error saving model: {e}")
-                            
-                            # print("MUS size:", len(mus(alt_model.constraints, solver="exact")))
-                            # ----------------------------------------------------
-                    
-                    else: # UNSAT case
-                        print("UNSAT", end="\t")
-                        # If you want to run MUS analysis on the UNSAT core, you could also save here
-                        try:
-                            pickle_path = f"/home/orestis_ubuntu/work/cpmpyfork/cp-mus-bench/{instance}-{i}-{j}-{v}.pkl"
-                            with open(pickle_path, 'wb') as f:
-                                pickle.dump(alt_model, f)
-                            print(f"(Saved model to {pickle_path})")
-                        except Exception as e:
-                            print(f"Error saving model: {e}")
-                        # print("MUS size:",len(mus(alt_model.constraints, solver="exact")))
+                            # print("MUS size:",len(mus(alt_model.constraints, solver="exact")))
+                        else:
+                            print("UNKNOWN STATUS", end="\t")
+                if count >= 30:
+                    break
+            if count >= 30:
+                break

@@ -8,15 +8,22 @@
 import warnings
 import numpy as np
 import cpmpy as cp
-from cpmpy.transformations.get_variables import get_variables
-from cpmpy.transformations.normalize import toplevel_list
+from cpmpy.solvers.pysat import CPM_pysat
+from cpmpy.transformations.comparison import only_numexpr_equality
+from cpmpy.transformations.decompose_global import decompose_in_tree
+from cpmpy.transformations.flatten_model import flatten_constraint
+from cpmpy.transformations.get_variables import get_variables, get_variables_model 
+from cpmpy.transformations.int2bool import int2bool
+from cpmpy.transformations.linearize import canonical_comparison, linearize_constraint, only_ge_comparison, only_positive_coefficients, sorted_coefficients
+from cpmpy.transformations.normalize import simplify_boolean, toplevel_list
 from cpmpy.solvers.solver_interface import ExitStatus
 import time
 
 from cpmpy.tools.explain.breakid import BreakID
 from cpmpy.tools.explain.breakid import BREAKID_PATH
+from cpmpy.transformations.reification import only_bv_reifies, only_implies, reify_rewrite
 
-from .utils import make_assump_model, get_slack, get_degree_over_sum, get_max_sat, get_min_sat, get_length, rotate_model, rotate_model_old
+from .utils import get_length_gen, make_assump_model, get_slack, get_degree_over_sum, get_max_sat, get_min_sat, get_length, rotate_model, rotate_model_group_cp, rotate_model_cp, rotate_model_group_linear, rotate_model_old, rotate_model_group
 
 # @profile
 def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check=True, assumption_removal=False, redundancy_removal=False, sorting="length", reversed_order=True, model_rotation=False, maximize_cons=False, recursive=True, assertions=False, use_symmetries=False, time_limit=1800, **kwargs):
@@ -137,13 +144,6 @@ def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
             assumps = list(core) + [red_var]
         else:
             assumps = list(core)
-        
-        # if model_rotation and maximize_cons:
-        #     # maximize the lefthandside of the constraint that is being removed from the core
-        #     # This will make it easier to apply model rotation as it means the constraint will be as close as possible to already be satisfied, while also guaranteeing that flipping a falsified literal from the constraint will falsify at least one other constraint. 
-        #     # TODO: if this is too slow, we can put a timelimit on the optimisation and mainly focus on the SAT/UNSAT result
-        #     # print(f"Maximizing {dmap[c]}")
-        #     s.maximize(dmap[c].args[0])
             
         start_solve = time.time()
         if solver != "pysat:Cadical195":
@@ -156,12 +156,6 @@ def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
         total_solve_time += last_call_time
         if s.status().exitstatus == ExitStatus.FEASIBLE or s.status().exitstatus == ExitStatus.OPTIMAL:
             assert get_slack(dmap[c]) < 0, f"Constraint {dmap[c]} has positive slack {get_slack(dmap[c])}"
-            
-
-            # for constraint_check in core:
-            #     if constraint_check is c:
-            #         continue
-            #     assert get_slack(dmap[constraint_check], dec_vars) >= 0, f"Constraint {dmap[constraint_check]} has negative slack {get_slack(dmap[constraint_check], dec_vars)}"
             sat_calls += 1
             # hard.append(dmap[c])
             core.add(c)
@@ -180,7 +174,7 @@ def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
                 #         continue
                 #     assert get_slack(constraint_check, assoc) >= 0, f"Constraint {dmap[constraint_check]} has negative slack {get_slack(dmap[constraint_check], assoc)}"
                 found_size = len(found_cons)
-                rotate_model_old([dmap[c] for c in core] + hard, dmap[c], recursive=recursive, found=found_cons, hard=hard)
+                rotate_model([dmap[c] for c in core] + hard, dmap[c], recursive=recursive, found=found_cons, hard=hard)
                 # print(f"Model rotation found {len(found) - found_size} new transition constraints")
                 nb_found_mr += len(found_cons) - found_size
                 # TODO: skip over found transition constraints
@@ -203,7 +197,7 @@ def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
             if clause_set_refinement:
                 new_core = set(s.get_core()).union(found)
                 if redundancy_removal:
-                    s += ~red_var # remove red constraint
+                    # s += ~red_var # remove red constraint
                     if red_var in new_core:
                         continue
                 nb_removed_refinement += len(core) - len(new_core)
@@ -225,7 +219,400 @@ def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
 
     return found, nb_removed_refinement, nb_found_mr, nb_found_symm, sat_calls, unsat_calls, total_solve_time
 
-def mus(soft, hard=[], solver="ortools", clause_set_refinement=True, init_check=True, redundancy_removal=False, assumption_removal=False, time_limit=None, **kwargs):
+def pb_mus_group(soft, hard=[], solver="exact", clause_set_refinement=True, init_check=True, assumption_removal=False, redundancy_removal=False, sorting="length", reversed_order=True, model_rotation=False, maximize_cons=False, recursive=True, assertions=False, use_symmetries=False, time_limit=1800, **kwargs):
+    """
+        A PB-level deletion-based MUS algorithm using assumption variables
+        and unsat core extraction.
+        All constraints are first translated to the PB-level and are then treated as grouped PB constraints.
+        You need the pysat solver for this translation!
+
+        For solvers that support s.solve(assumptions=...) and s.get_core()
+
+        All constraint are PB constraints, or groups of PB constraints.
+
+        Will extract an unsat core and then shrink the core further
+        by repeatedly ommitting one assumption variable.
+
+        :param: soft: soft constraints, list of expressions
+        :param: hard: hard constraints, optional, list of expressions
+        :param: solver: name of a solver, must support assumptions (e.g, "ortools", "exact", "z3" or "pysat")
+        :param: time_limit: optional time limit for the MUS extraction process
+        :param: assumption_removal: when true, will permanently remove assumption variables when the it is determined whether they are in the MUS or not
+        :param: redundancy_removal: when true, will add the negation of the constraint, of which the inclusion in the MUS is being tested, to the solver call
+        :param: clause_set_refinement: when True, will use the solver's UNSAT core to refine the MUS further
+        :param: init_check: when True, will check that the model is UNSAT before starting the MUS algorithm 
+        :param: model_rotation: when True, apply model rotation after finding a transition constraint in order to find new transition constraints without needing to call the solver again
+        :param: dec_vars: decision variables to use for model rotation, if model_rotation is True. Must be provided if model_rotation is True.
+        :param: sorting: sorting heuristic to use for the constraints, can only be "length"
+        :param: reversed_order: if True, will reverse the order of the constraints in the sorting heuristic
+        :param: maximize_cons: if True, will maximize the lefthandside of the constraint that is being removed from the core in order to more easily apply model rotation.
+    """
+
+    assert hasattr(cp.SolverLookup.get(solver), "get_core"), f"mus requires a solver that supports assumption variables, use mus_naive with {solver} instead"
+
+    # make assumption (indicator) variables and soft-constrained model
+    (m, soft, assump) = make_assump_model(soft, hard=hard, name="mus_sel")
+    
+    slv = CPM_pysat()
+    
+    constraints = m.constraints
+    
+    constraints = toplevel_list(constraints)
+    constraints = decompose_in_tree(constraints,supported=frozenset({'alldifferent'}), supported_reified=frozenset({'alldifferent'}), csemap=slv._csemap)  # Alldiff has a specialzed MIP decomp
+    constraints = simplify_boolean(constraints)
+    constraints = flatten_constraint(constraints, csemap=slv._csemap)  # flat normal form
+    constraints = reify_rewrite(constraints, supported=frozenset(['sum', 'wsum', 'alldifferent']), csemap=slv._csemap)  # constraints that support reification
+    constraints = only_numexpr_equality(constraints, supported=frozenset(["sum", "wsum", 'alldifferent']), csemap=slv._csemap)  # supports >, <, !=
+    constraints = only_bv_reifies(constraints, csemap=slv._csemap)
+    constraints = only_implies(constraints, csemap=slv._csemap)  # anything that can create full reif should go above...
+    constraints = linearize_constraint(constraints, supported=frozenset({"sum", "wsum"}), csemap=slv._csemap)  # the core of the MIP-linearization
+    # constraints = int2bool(constraints, slv.ivarmap, encoding="binary")
+    constraints = canonical_comparison(constraints)
+    # constraints = only_ge_comparison(constraints)
+    # constraints = only_positive_coefficients(constraints)
+    # constraints = sorted_coefficients(constraints)
+    
+    # print(constraints)
+    
+    model = cp.Model(constraints)
+    
+    if use_symmetries:
+        breakid = BreakID(BREAKID_PATH)  # use pb branch
+        permutations, matrices = breakid.get_generators(constraints, format="opb", subset=assump,pb=31, no_row=False)
+        symmetries = permutations + matrices
+        # print(f"there are {len(symmetries)} symmetries")
+        
+    s = cp.SolverLookup.get(solver, model)
+
+    # create dictionary from assump to soft
+    dmap = dict(zip(assump, soft))
+    # create dictionary from assump to group
+    groups = {a: [] for a in assump}
+    hard_trans = []
+    for c in constraints:
+        if c.name == "->" and c.args[0] in assump:
+            # print(c)
+            groups[c.args[0]].append(c.args[1])
+        else:
+            hard_trans.append(c)
+    
+    hard.extend(hard_trans)
+                
+    
+    start = time.time()
+    unsat_calls = 0
+    sat_calls = 0
+    total_solve_time = 0
+    nb_removed_refinement = 0
+    nb_found_mr = 0
+    nb_found_symm = 0
+    
+    core_size = len(assump)
+    
+    core = set(assump)
+
+    if init_check:
+        # setting all assump vars to true should be UNSAT
+        # print("Performing initial UNSAT check...")
+        
+        if solver == "pysat:Cadical195":
+            warnings.warn("Can not add time_limit to pysat:Cadical195 solver calls, ignoring time_limit argument")
+            assert not s.solve(assumptions=assump, **kwargs), "MUS: model must be UNSAT"
+        else:
+            assert not s.solve(assumptions=assump, time_limit=time_limit, **kwargs), "MUS: model must be UNSAT"
+            
+        if time_limit is not None:
+            elapsed = time.time() - start
+            if elapsed >= time_limit:
+                raise TimeoutError("Time's up during initial solve")
+            total_solve_time += elapsed
+        # print(f"Initial UNSAT check done in {time.time() - start} sec.")
+        unsat_calls += 1
+        new_core = set(s.get_core())  # start from solver's UNSAT core
+        if assumption_removal:
+            newly_removed = core - new_core
+            for r in newly_removed:
+                s += ~r # remove red constraint
+        core = new_core
+        
+        nb_removed_refinement += core_size - len(core)
+    else:
+        warnings.warn("No initial check, using all assumptions. The initial model may be SAT.", UserWarning)
+        core = set(assump) # start from all assumptions, this may avoid an unnecessarily slow UNSAT call, if the model is not severely overconstrained
+
+    # deletion-based MUS
+    # order so that constraints with many variables are tried and removed first
+    heuristics = {
+        "length": get_length_gen,
+    }
+    
+    found = set() # keep track of found transition constraints
+    found_cons = set()
+    
+    
+    
+    for c in sorted(core, key=lambda c : heuristics[sorting](dmap[c]), reverse=reversed_order):
+        # print(f"Checking {c}")
+        if c not in core:
+            # print(f"skipping {dmap[c]}")
+            continue # already removed
+        if (model_rotation or use_symmetries) and dmap[c] in found_cons:
+            found.add(c)
+            continue
+        
+        core_size = len(core)
+        
+        core.remove(c) # remove from core
+        
+        if redundancy_removal:
+            red_constraint = ~dmap[c]
+            red_var = cp.boolvar()
+            s += red_var.implies(red_constraint) # add red constraint
+            assumps = list(core) + [red_var]
+        else:
+            assumps = list(core)
+            
+        start_solve = time.time()
+        if solver != "pysat:Cadical195":
+            s.solve(assumptions=assumps, time_limit=time_limit-(int(time.time()-start)), **kwargs)
+        else:
+            s.solve(assumptions=assumps, **kwargs)
+        
+        last_call_time = time.time() - start_solve
+        # print(last_call_time)
+        total_solve_time += last_call_time
+        if s.status().exitstatus == ExitStatus.FEASIBLE or s.status().exitstatus == ExitStatus.OPTIMAL:
+            # print(dmap[c])
+            # print(dmap[c].value())
+            # assert not dmap[c].value(), f"Constraint {dmap[c]} is {dmap[c].value()}, should be false"
+            # for sel in core:
+            #     assert dmap[sel].value()
+            # TODO: check satisfiability of group, need actual group dict
+            sat_calls += 1
+            # hard.append(dmap[c])
+            core.add(c)
+            if assumption_removal:
+                s += c # permanently set to true
+            found.add(c) # add to found transition constraints
+            found_cons.add(dmap[c])
+            if model_rotation:
+                if maximize_cons and 3*last_call_time < time_limit - (time.time() - start):
+                    s.maximize(dmap[c].args[0])
+                    new_t_limit = max(0.001, 3*last_call_time)
+                    s.solve(time_limit=new_t_limit, assumptions=assumps, **kwargs)
+
+                found_size = len(found_cons)
+                rotate_model_group_linear(groups, c, recursive=recursive, found=found_cons, hard=hard)
+                # print(f"Model rotation found {len(found) - found_size} new transition constraints")
+                nb_found_mr += len(found_cons) - found_size
+                # TODO: skip over found transition constraints
+                
+            if use_symmetries:
+                for symm in symmetries:
+                    new_found = symm.get_symmetric_images_in_subset(core, c)
+                    for c in new_found:
+                        found_cons.add(dmap[c])
+                    found_size = len(found)
+                    found.update(new_found)
+                    nb_found_symm += len(found) - found_size
+                
+                # get the associatied solution for the found transition constraint
+                # print(f"constraint: {dmap[c]}")
+                # print(f"vars: {dec_vars.value()}")
+                # print(f"constraint slack: {get_slack(dmap[c], dec_vars)}")
+        elif s.status().exitstatus == ExitStatus.UNSATISFIABLE: # UNSAT, use new solver core (clause set refinement)
+            unsat_calls += 1
+            if clause_set_refinement:
+                new_core = set(s.get_core()).union(found)
+                if redundancy_removal:
+                    # s += ~red_var # remove red constraint
+                    if red_var in new_core:
+                        continue
+                nb_removed_refinement += len(core) - len(new_core)
+                if assumption_removal:
+                    newly_removed = core - new_core
+                    for r in newly_removed:
+                        s += ~r # permanently set to false
+                    s += ~c # permanently set to false
+                core = new_core
+        # print(f"Model: {m}")
+        else:
+            raise RuntimeError(f"MUS: solver returned unexpected status {s.status().exitstatus}")
+            
+    # print(f"Number of solve calls: {nb_sat_calls + nb_unsat_calls} ({nb_sat_calls} SAT, {nb_unsat_calls} UNSAT)")
+    # print(f"Total solve time: {total_solve_time}")
+    if assertions:
+        
+        assert len(mus(list(found_cons), hard=hard, solver=solver)[0]) == len(found), "MUS: final core is not a MUS"
+
+    return [dmap[c] for c in found], found, nb_removed_refinement, nb_found_mr, nb_found_symm, sat_calls, unsat_calls, total_solve_time
+
+def cp_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check=True, assumption_removal=False, redundancy_removal=False, sorting="length", reversed_order=True, model_rotation=False, maximize_cons=False, recursive=True, assertions=False, use_symmetries=False, time_limit=1800, **kwargs):
+    """
+        A PB-level deletion-based MUS algorithm using assumption variables
+        and unsat core extraction.
+        All constraints are first translated to the PB-level and are then treated as grouped PB constraints.
+        You need the pysat solver for this translation!
+
+        For solvers that support s.solve(assumptions=...) and s.get_core()
+
+        All constraint are PB constraints, or groups of PB constraints.
+
+        Will extract an unsat core and then shrink the core further
+        by repeatedly ommitting one assumption variable.
+
+        :param: soft: soft constraints, list of expressions
+        :param: hard: hard constraints, optional, list of expressions
+        :param: solver: name of a solver, must support assumptions (e.g, "ortools", "exact", "z3" or "pysat")
+        :param: time_limit: optional time limit for the MUS extraction process
+        :param: assumption_removal: when true, will permanently remove assumption variables when the it is determined whether they are in the MUS or not
+        :param: redundancy_removal: when true, will add the negation of the constraint, of which the inclusion in the MUS is being tested, to the solver call
+        :param: clause_set_refinement: when True, will use the solver's UNSAT core to refine the MUS further
+        :param: init_check: when True, will check that the model is UNSAT before starting the MUS algorithm 
+        :param: model_rotation: when True, apply model rotation after finding a transition constraint in order to find new transition constraints without needing to call the solver again
+        :param: dec_vars: decision variables to use for model rotation, if model_rotation is True. Must be provided if model_rotation is True.
+        :param: sorting: sorting heuristic to use for the constraints, can only be "length"
+        :param: reversed_order: if True, will reverse the order of the constraints in the sorting heuristic
+        :param: maximize_cons: if True, will maximize the lefthandside of the constraint that is being removed from the core in order to more easily apply model rotation.
+    """
+
+    assert hasattr(cp.SolverLookup.get(solver), "get_core"), f"mus requires a solver that supports assumption variables, use mus_naive with {solver} instead"
+
+    # make assumption (indicator) variables and soft-constrained model
+    (m, soft, assump) = make_assump_model(soft, hard=hard, name="mus_sel")
+        
+    s = cp.SolverLookup.get(solver, m)
+
+    # create dictionary from assump to soft
+    dmap = dict(zip(assump, soft))
+                
+    
+    start = time.time()
+    unsat_calls = 0
+    sat_calls = 0
+    total_solve_time = 0
+    nb_removed_refinement = 0
+    nb_found_mr = 0
+    nb_found_symm = 0
+    
+    core_size = len(assump)
+    
+    core = set(assump)
+
+    if init_check:
+        # setting all assump vars to true should be UNSAT
+        # print("Performing initial UNSAT check...")
+    
+        if solver == "pysat:Cadical195":
+            warnings.warn("Can not add time_limit to pysat:Cadical195 solver calls, ignoring time_limit argument")
+            assert not s.solve(assumptions=assump, **kwargs), "MUS: model must be UNSAT"
+        else:
+            assert not s.solve(assumptions=assump, time_limit=time_limit, **kwargs), "MUS: model must be UNSAT"
+            
+        if time_limit is not None:
+            elapsed = time.time() - start
+            if elapsed >= time_limit:
+                raise TimeoutError("Time's up during initial solve")
+            total_solve_time += elapsed
+        # print(f"Initial UNSAT check done in {time.time() - start} sec.")
+        unsat_calls += 1
+        new_core = set(s.get_core())  # start from solver's UNSAT core
+        core = new_core
+        
+        nb_removed_refinement += core_size - len(core)
+    else:
+        warnings.warn("No initial check, using all assumptions. The initial model may be SAT.", UserWarning)
+        core = set(assump) # start from all assumptions, this may avoid an unnecessarily slow UNSAT call, if the model is not severely overconstrained
+
+    # deletion-based MUS
+    # order so that constraints with many variables are tried and removed first
+    heuristics = {
+        "length": get_length_gen,
+    }
+    
+    found = set() # keep track of found transition constraints
+    found_cons = set()
+    
+    
+    
+    for c in sorted(core, key=lambda c : heuristics[sorting](dmap[c]), reverse=reversed_order):
+        # print(f"Checking {c}")
+        if c not in core:
+            # print(f"skipping {dmap[c]}")
+            continue # already removed
+        if (model_rotation or use_symmetries) and dmap[c] in found_cons:
+            found.add(c)
+            continue
+        
+        core_size = len(core)
+        
+        core.remove(c) # remove from core
+        
+        if redundancy_removal:
+            red_constraint = ~dmap[c]
+            red_var = cp.boolvar()
+            s += red_var.implies(red_constraint) # add red constraint
+            assumps = list(core) + [red_var]
+        else:
+            assumps = list(core)
+            
+        start_solve = time.time()
+
+        s.solve(assumptions=assumps, **kwargs)
+        
+        last_call_time = time.time() - start_solve
+        # print(last_call_time)
+        total_solve_time += last_call_time
+        if s.status().exitstatus == ExitStatus.FEASIBLE:
+            # print(dmap[c])
+            # print(dmap[c].value())
+            assert not dmap[c].value(), f"Constraint {dmap[c]} is satisfied"
+            for sel in core:
+                assert sel.value()
+                assert dmap[sel].value()
+            # TODO: check satisfiability of group, need actual group dict
+            sat_calls += 1
+            # hard.append(dmap[c])
+            core.add(c)
+            if assumption_removal:
+                s += c # permanently set to true
+            found.add(c) # add to found transition constraints
+            found_cons.add(dmap[c])
+            if model_rotation:
+
+                found_size = len(found_cons)
+                rotate_model_cp([dmap[c] for c in core] + hard, dmap[c], recursive=recursive, found=found_cons, hard=hard)
+                # print(f"Model rotation found {len(found) - found_size} new transition constraints")
+                nb_found_mr += len(found_cons) - found_size
+                # TODO: skip over found transition constraints
+                
+                # get the associatied solution for the found transition constraint
+                # print(f"constraint: {dmap[c]}")
+                # print(f"vars: {dec_vars.value()}")
+                # print(f"constraint slack: {get_slack(dmap[c], dec_vars)}")
+        elif s.status().exitstatus == ExitStatus.UNSATISFIABLE: # UNSAT, use new solver core (clause set refinement)
+            unsat_calls += 1
+            if clause_set_refinement:
+                new_core = set(s.get_core()).union(found)
+                if redundancy_removal:
+                    # s += ~red_var # remove red constraint
+                    if red_var in new_core:
+                        continue
+                nb_removed_refinement += len(core) - len(new_core)
+                core = new_core
+        # print(f"Model: {m}")
+        else:
+            raise RuntimeError(f"MUS: solver returned unexpected status {s.status().exitstatus}")
+            
+    # print(f"Number of solve calls: {nb_sat_calls + nb_unsat_calls} ({nb_sat_calls} SAT, {nb_unsat_calls} UNSAT)")
+    # print(f"Total solve time: {total_solve_time}")
+    if assertions:
+        
+        assert len(mus(list(found_cons), hard=hard, solver=solver)[0]) == len(found), "MUS: final core is not a MUS"
+
+    return [dmap[c] for c in found], found, nb_removed_refinement, nb_found_mr, nb_found_symm, sat_calls, unsat_calls, total_solve_time
+
+def mus_new(soft, hard=[], solver="ortools", redundancy_removal=False, assumption_removal=False, time_limit=None, **kwargs):
     """
         A CP deletion-based MUS algorithm using assumption variables
         and unsat core extraction
@@ -315,6 +702,7 @@ def mus(soft, hard=[], solver="ortools", clause_set_refinement=True, init_check=
             s.solve(assumptions=assumps)
         total_solve_time += time.time() - curr_time
         if s.status().exitstatus == ExitStatus.FEASIBLE:
+            print("found const")
             sat_calls += 1
             core.add(c)
             found.add(c)
@@ -322,6 +710,7 @@ def mus(soft, hard=[], solver="ortools", clause_set_refinement=True, init_check=
             if assumption_removal:
                 s += c # permanently set to true
         elif s.status().exitstatus == ExitStatus.UNSATISFIABLE:
+            print("removing const")
             # UNSAT, use new solver core (clause set refinement)
             unsat_calls += 1
             new_core = set(s.get_core()).union(found)
@@ -340,7 +729,52 @@ def mus(soft, hard=[], solver="ortools", clause_set_refinement=True, init_check=
             raise RuntimeError(f"MUS: solver returned unexpected status {s.status().exitstatus}")
 
     # return [dmap[avar] for avar in found], nb_removed_refinement, nb_found_mr, sat_calls, unsat_calls, total_solve_time
-    return found, nb_removed_refinement, nb_found_mr, sat_calls, unsat_calls, total_solve_time
+    return [dmap[c] for c in found], found, nb_removed_refinement, nb_found_mr, sat_calls, unsat_calls, total_solve_time
+
+def mus(soft, hard=[], solver="ortools"):
+    """
+        A CP deletion-based MUS algorithm using assumption variables
+        and unsat core extraction
+
+        For solvers that support s.solve(assumptions=...) and s.get_core()
+
+        Each constraint is an arbitrary CPMpy expression, so it can
+        also be sublists of constraints (e.g. constraint groups),
+        contain aribtrary nested expressions, global constraints, etc.
+
+        Will extract an unsat core and then shrink the core further
+        by repeatedly ommitting one assumption variable.
+
+        :param: soft: soft constraints, list of expressions
+        :param: hard: hard constraints, optional, list of expressions
+        :param: solver: name of a solver, must support assumptions (e.g, "ortools", "exact", "z3" or "pysat")
+    """
+
+    assert hasattr(cp.SolverLookup.get(solver), "get_core"), f"mus requires a solver that supports assumption variables, use mus_naive with {solver} instead"
+
+    # make assumption (indicator) variables and soft-constrained model
+    (m, soft, assump) = make_assump_model(soft, hard=hard)
+    s = cp.SolverLookup.get(solver, m)
+
+    # create dictionary from assump to soft
+    dmap = dict(zip(assump, soft))
+
+    # setting all assump vars to true should be UNSAT
+    assert not s.solve(assumptions=assump), "MUS: model must be UNSAT"
+    core = set(s.get_core())  # start from solver's UNSAT core
+
+    # deletion-based MUS
+    # order so that constraints with many variables are tried and removed first
+    for c in sorted(core, key=lambda c : -len(get_variables(dmap[c]))):
+        if c not in core:
+            continue # already removed
+        core.remove(c)
+        if s.solve(assumptions=list(core)) is True:
+            core.add(c)
+        else: # UNSAT, use new solver core (clause set refinement)
+            core = set(s.get_core())
+
+    return [dmap[avar] for avar in core]
 
 def check_mus(mus, solver="exact"):
     """
@@ -372,8 +806,7 @@ def check_mus(mus, solver="exact"):
             return False
         else:
             raise RuntimeError(f"MUS: solver returned unexpected status {s.status().exitstatus}")
-
-    # return [dmap[avar] for avar in found], nb_removed_refinement, nb_found_mr, sat_calls, unsat_calls, total_solve_time
+        
     return True
 
 

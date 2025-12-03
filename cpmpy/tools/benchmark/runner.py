@@ -98,9 +98,9 @@ def wrapper(instance_runner, conn, kwargs, verbose):
     try:
         kwargs["verbose"] = verbose
         # print(f"running instance: {kwargs.get('instance_name', 'unknown')} with solver: {kwargs.get('solver', 'default')}", flush=True)
-        # instance_runner.run(**kwargs)
+        instance_runner.run(**kwargs)
         # print(f"finished instance: {kwargs.get('instance_name', 'unknown')}", flush=True)
-        instance_runner.run_mus(**kwargs)
+        # instance_runner.run_mus(**kwargs)
         # instance_runner.run_conv(**kwargs)
         conn.send({"status": "ok"})
     except TimeoutError:
@@ -138,12 +138,12 @@ def execute_instance(args: Tuple[callable, str, dict, callable, str, int, int, i
     instance_runner, filename, metadata, open, solver, time_limit, mem_limit, cores, output_file, verbose, intermediate, checker_path = args
 
     # Fieldnames for the CSV file
-    # fieldnames = list(metadata.keys()) + \
-    #              ['solver',
-    #               'time_total', 'time_parse', 'time_model', 'time_post', 'time_solve',
-    #               'status', 'objective_value', 'solution', 'intermediate', 'checker_result']
+    fieldnames = list(metadata.keys()) + \
+                 ['solver',
+                  'time_total', 'time_parse', 'time_model', 'time_post', 'time_solve',
+                  'status', 'objective_value', 'solution', 'intermediate', 'checker_result']
     # other fieldnames for MUS
-    fieldnames = list(metadata.keys()) + ['solver', 'time_total', 'time_parse', 'time_solve', 'mus_size', 'refinement', 'rotation', 'symmetry', 'sat_calls', 'unsat_calls', 'solver_calls', 'total_solve_only', 'solution', 'status']
+    # fieldnames = list(metadata.keys()) + ['solver', 'time_total', 'time_parse', 'time_solve', 'mus_size', 'refinement', 'rotation', 'symmetry', 'sat_calls', 'unsat_calls', 'solver_calls', 'total_solve_only', 'solution', 'status']
     # fieldnames= list(metadata.keys()) + ['solver', 'time_total', 'time_parse', 'time_pb_to_cnf', 'time_model', 'time_cnf_to_gcnf', 'time_solve', 'solution', 'status']
     result = dict.fromkeys(fieldnames)  # init all fields to None
     for k in metadata.keys():
@@ -151,8 +151,10 @@ def execute_instance(args: Tuple[callable, str, dict, callable, str, int, int, i
     result['solver'] = solver
 
     # Decompress before timers start
-    with open(filename) as f:   # <- dataset-specific 'open' callable
-        file = f.read() # read to memory-mapped file
+    # with open(filename) as f:   # <- dataset-specific 'open' callable
+    #     file = f.read() # read to memory-mapped file
+    
+    file = filename
 
     # Start total timing
     total_start = time.time()
@@ -222,8 +224,8 @@ def execute_instance(args: Tuple[callable, str, dict, callable, str, int, int, i
             
     else:
         # TODO: only do when running MUS 
-        # pass
-        result['solver_calls'] = result['sat_calls'] + result['unsat_calls']
+        pass
+        # result['solver_calls'] = result['sat_calls'] + result['unsat_calls']
 
     # if checker_path is not None and complete_solution is not None: TODO: generalise 'checkers' for benchmarks
     #     checker_output, checker_time = run_solution_checker(

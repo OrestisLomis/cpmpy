@@ -76,7 +76,6 @@ def get_variables(expr, collect=None):
     seen_add = seen.add
     return [x for x in vars_ if not (x in seen or seen_add(x))]
 
-
 def print_variables(expr_or_model):
     """
         Print variables **and their domains**

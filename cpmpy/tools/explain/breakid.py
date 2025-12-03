@@ -10,16 +10,16 @@ import cpmpy as cp
 from cpmpy.transformations.flatten_model import flatten_constraint
 from cpmpy.transformations.to_cnf import to_cnf
 from cpmpy.transformations.get_variables import get_variables
-from cpmpy.transformations.normalize import toplevel_list
+from cpmpy.transformations.normalize import simplify_boolean, toplevel_list
 from cpmpy.transformations.decompose_global import decompose_in_tree
 from cpmpy.transformations.reification import reify_rewrite, only_implies, only_bv_reifies
 from cpmpy.transformations.comparison import only_numexpr_equality
-from cpmpy.transformations.linearize import linearize_constraint, only_positive_bv
+from cpmpy.transformations.linearize import linearize_constraint, only_positive_bv, only_positive_coefficients
 from cpmpy.transformations.safening import no_partial_functions
 from cpmpy.transformations.int2bool import _decide_encoding, _encode_int_var, int2bool
 
 from cpmpy.expressions.variables import _NumVarImpl, _BoolVarImpl, NegBoolView
-from cpmpy.expressions.core import Comparison, Operator
+from cpmpy.expressions.core import Comparison, Operator, BoolVal
 from cpmpy.expressions.utils import is_num, get_bounds
 
 import subprocess
@@ -375,16 +375,22 @@ class BreakID:
             Uses CPMpy transformation pipeline (similar to Exact's) to linearize all constraints.
             Hence, the output of this function may change depending on the version of CPMpy used.
         """
+        from cpmpy.solvers.pysat import CPM_pysat
+        slv = CPM_pysat()
+        
         constraints = toplevel_list(constraints)
-        constraints = decompose_in_tree(constraints,supported=frozenset({'alldifferent'}))  # Alldiff has a specialzed MIP decomp
-        constraints = flatten_constraint(constraints)  # flat normal form
-        constraints = reify_rewrite(constraints, supported=frozenset(['sum', 'wsum']))  # constraints that support reification
-        constraints = only_numexpr_equality(constraints, supported=frozenset(["sum", "wsum"]))  # supports >, <, !=
-        constraints = only_bv_reifies(constraints)
-        constraints = only_implies(constraints)  # anything that can create full reif should go above...
-        constraints = linearize_constraint(constraints, supported=frozenset({"sum", "wsum"}))  # the core of the MIP-linearization
-        constraints = only_positive_bv(constraints)
-        constraints = int2bool(constraints)
+        constraints = decompose_in_tree(constraints,supported=frozenset({'alldifferent'}), csemap=slv._csemap)  # Alldiff has a specialzed MIP decomp
+        constraints = simplify_boolean(constraints)
+        constraints = flatten_constraint(constraints, csemap=slv._csemap)  # flat normal form
+        constraints = reify_rewrite(constraints, supported=frozenset(['sum', 'wsum']), csemap=slv._csemap)  # constraints that support reification
+        constraints = only_numexpr_equality(constraints, supported=frozenset(["sum", "wsum"]), csemap=slv._csemap)  # supports >, <, !=
+        constraints = only_bv_reifies(constraints, csemap=slv._csemap)
+        constraints = only_implies(constraints, csemap=slv._csemap)  # anything that can create full reif should go above...
+        constraints = linearize_constraint(constraints, supported=frozenset({"sum", "wsum"}), csemap=slv._csemap)  # the core of the MIP-linearization
+        constraints = int2bool(constraints, slv.ivarmap, encoding=slv.encoding)
+        constraints = only_positive_coefficients(constraints)
+        
+        # print(constraints)
 
         def format_comparison(cons):
 
@@ -405,6 +411,7 @@ class BreakID:
                 cons = lhs >= rhs
 
             assert cons.name == ">="
+            return [cons]
             return [format_wsum(lhs) + f" >= {rhs};"]
 
         def format_wsum(wsum_expr):
@@ -432,7 +439,7 @@ class BreakID:
             M = rhs - get_bounds(lhs)[1]  # max bound of lhs
             lhs.args[0].insert(0, M)
             lhs.args[1].insert(0, ~cond)
-            return format_comparison(only_positive_bv([lhs <= rhs])[0])
+            return format_comparison(only_positive_coefficients([lhs <= rhs])[0])
 
         def bigM_ge(cond, subexpr):
             lhs, rhs = subexpr.args
@@ -441,16 +448,20 @@ class BreakID:
             M = rhs - get_bounds(lhs)[0]  # min bound of lhs
             lhs.args[0].insert(0, M)
             lhs.args[1].insert(0, ~cond)
-            return format_comparison(only_positive_bv([lhs >= rhs])[0])
+            return format_comparison(only_positive_coefficients([lhs >= rhs])[0])
 
         str_cons = []
         flipmap = {"<=":">=", "==":"==", ">=":"<="}
 
         # keep map of variables to variable indices, used during parsing too
         self._map = {v : i+1 for i, v in enumerate(natsorted(get_variables(constraints), key=str))}
+        
+        print(constraints)
 
         for cons in constraints:
             """Constraints are weighted linear sums, or half-reification thereof"""
+            if isinstance(cons, BoolVal):
+                continue
             if isinstance(cons, Comparison):
                 lhs, rhs = cons.args
                 lhs = _to_wsum(lhs) # can also be numvar still
@@ -458,25 +469,28 @@ class BreakID:
 
             elif isinstance(cons, Operator) and cons.name == "->":
                 cond, subexpr = cons.args
-                assert isinstance(cond, _BoolVarImpl)
-                assert isinstance(subexpr, Comparison)
-                assert is_num(subexpr.args[1])
-                subexpr.args[0] = _to_wsum(subexpr.args[0])
-                if subexpr.args[1] <= 0:
-                    subexpr.args[0].args[0] = [-w for w in subexpr.args[0].args[0]]
-                    subexpr.args[1] = - subexpr.args[1]
-                    subexpr.name = flipmap[subexpr.name]
-
-
-                if subexpr.name == "<=":
-                    str_cons += bigM_le(cond, subexpr)
-                elif subexpr.name == ">=":
-                    str_cons += bigM_ge(cond, subexpr)
-                elif subexpr.name == "==":
-                    str_cons += bigM_le(cond, subexpr)
-                    str_cons += bigM_ge(cond, subexpr)
+                if isinstance(subexpr, _BoolVarImpl):
+                    str_cons += [Comparison(">=", Operator("wsum", [[1, 1], [~cond, subexpr]]), 1)]
                 else:
-                    raise ValueError(f"Unexpected comparison in reification: {cons}")
+                    assert isinstance(cond, _BoolVarImpl)
+                    assert isinstance(subexpr, Comparison)
+                    assert is_num(subexpr.args[1])
+                    subexpr.args[0] = _to_wsum(subexpr.args[0])
+                    if subexpr.args[1] <= 0:
+                        subexpr.args[0].args[0] = [-w for w in subexpr.args[0].args[0]]
+                        subexpr.args[1] = - subexpr.args[1]
+                        subexpr.name = flipmap[subexpr.name]
+
+
+                    if subexpr.name == "<=":
+                        str_cons += bigM_le(cond, subexpr)
+                    elif subexpr.name == ">=":
+                        str_cons += bigM_ge(cond, subexpr)
+                    elif subexpr.name == "==":
+                        str_cons += bigM_le(cond, subexpr)
+                        str_cons += bigM_ge(cond, subexpr)
+                    else:
+                        raise ValueError(f"Unexpected comparison in reification: {cons}")
             else:
                 raise ValueError(f"Expected linear sum or reification thereof, but got {cons}")
 
@@ -485,8 +499,9 @@ class BreakID:
         else:
             obj = ""
 
-        header = f"* #variable= {len(self._map)} #constraint= {len(str_cons)}\n"
-        return header + obj + "\n".join(str_cons)
+        # header = f"* #variable= {len(self._map)} #constraint= {len(str_cons)}\n"
+        # return header + obj + "\n".join(str_cons)
+        return str_cons
 
     def _parse_opb(self, string, sep=";"):
         """

@@ -364,9 +364,9 @@ def linearize_constraint(lst_of_expr, supported={"sum","wsum"}, reified=False, c
                 Decomposes through bi-partite matching
             """
             # TODO check performance of implementation
-            if reified is True:
-                raise ValueError("Linear decomposition of AllDifferent does not work reified. "
-                                 "Ensure 'alldifferent' is not in the 'supported_nested' set of 'decompose_in_tree'")
+            # if reified is True:
+            #     raise ValueError("Linear decomposition of AllDifferent does not work reified. "
+            #                      "Ensure 'alldifferent' is not in the 'supported_reified' set of 'decompose_in_tree'")
 
             lbs, ubs = get_bounds(cpm_expr.args)
             lb, ub = min(lbs), max(ubs)
@@ -590,7 +590,7 @@ def canonical_comparison(lst_of_expr):
                 
                 # 2) add collected variables to lhs
                 if isinstance(lhs, Operator) and lhs.name == "sum":
-                    lhs = sum([1 * a for a in lhs.args] + lhs2)
+                    lhs = sum(lhs.args + lhs2)
                 elif isinstance(lhs, _NumVarImpl) or (isinstance(lhs, Operator) and lhs.name == "wsum"):
                     lhs = lhs + lhs2
                 else:
@@ -625,7 +625,57 @@ def canonical_comparison(lst_of_expr):
                     lhs = Operator("sum", [lhs])
 
             newlist.append(eval_comparison(cpm_expr.name, lhs, rhs))
+        elif isinstance(cpm_expr, _BoolVarImpl):
+            lhs = Operator("wsum", [1, cpm_expr])
+            newlist.append(eval_comparison(">=", lhs, 1))
         else:   # rest of expressions
+            newlist.append(cpm_expr)
+
+    return newlist
+
+def only_ge_comparison(lst_of_expr):
+    """
+        Make all comparisons type greater than or equal.
+        When the comparison is '==', then the constraint is split in two, the >= and the <= form.
+        To make comparisons of the from <= into >=, all the coefficients are negated.
+
+        Expects the input constraints canonical comparisons. Only apply after applying :func:`canonical_comparison`
+    """
+
+    lst_of_expr = toplevel_list(lst_of_expr) # ensure it is a list
+
+    newlist = []
+    for cpm_expr in lst_of_expr:
+        if isinstance(cpm_expr, Operator) and cpm_expr.name == '->':    # half reification of comparison
+            lhs, rhs = cpm_expr.args
+            if isinstance(rhs, Comparison) and rhs.name != ">=" and (rhs.args[0].name == "wsum" or rhs.args[0].name == "sum"):
+                rhs = only_ge_comparison(rhs)
+                for r in rhs:
+                    newlist.append(lhs.implies(r))
+            elif isinstance(lhs, Comparison) and lhs.name != ">=" and (rhs.args[0].name == "wsum" or rhs.args[0].name == "sum"):
+                lhs = only_ge_comparison(lhs)
+                for l in lhs:
+                    newlist.append(l.implies(rhs))
+            else:
+                newlist.append(cpm_expr)
+
+        elif isinstance(cpm_expr, Comparison):
+            lhs, rhs = cpm_expr.args
+            if lhs.name == "sum":
+                lhs = Operator("wsum", [[1]*len(lhs.args), lhs.args])
+            if cpm_expr.name == "==" and lhs.name == "wsum":
+                newlist.append(eval_comparison(">=", lhs, rhs))
+                newlist.append(only_ge_comparison(eval_comparison("<=", lhs, rhs))[0])
+            elif cpm_expr.name == "<=" and lhs.name == "wsum":
+                coeffs = lhs.args[0]
+                neg_coeffs = [-coeff for coeff in coeffs]
+                lits = lhs.args[1]
+                new_lhs = Operator("wsum", [neg_coeffs, lits])
+                newlist.append(eval_comparison(">=", new_lhs, -rhs))
+
+            else:
+                newlist.append(cpm_expr)
+        else:
             newlist.append(cpm_expr)
 
     return newlist
@@ -655,10 +705,11 @@ def only_positive_coefficients(lst_of_expr):
                 rhs += sum(-weights[i] for i in idxes)
 
                 # Simplify wsum to sum if all weights are 1
-                if all(w == 1 for w in nw):
-                    lhs = Operator("sum", [list(na)])
-                else:
-                    lhs = Operator("wsum", [list(nw), list(na)])
+                # if all(w == 1 for w in nw):
+                #     lhs = Operator("sum", [list(na)])
+                # else:
+                    # lhs = Operator("wsum", [list(nw), list(na)])
+                lhs = Operator("wsum", [list(nw), list(na)]) # do not simplify because then breaks somewhere else
 
             newlist.append(eval_comparison(cpm_expr.name, lhs, rhs))
 
@@ -668,6 +719,55 @@ def only_positive_coefficients(lst_of_expr):
             assert isinstance(cond, _BoolVarImpl), f"{cpm_expr} is not a supported linear expression. Apply " \
                                                    f"`linearize_constraint` before calling `only_positive_coefficients` "
             subexpr = only_positive_coefficients([subexpr])
+            newlist += [cond.implies(expr) for expr in subexpr]
+
+        else:
+            newlist.append(cpm_expr)
+
+    return newlist
+
+def sorted_coefficients(lst_of_expr):
+    """
+        
+        `cpm_expr` is expected to be a >= comparison with only positive coeffs.
+        Only apply after applying :func:`only_positive_coefficients(cpm_expr) <only_positive_coefficients>`
+
+        Resulting expression is linear.
+    """
+    newlist = []
+    for cpm_expr in lst_of_expr:
+        if isinstance(cpm_expr, Comparison):
+            lhs, rhs = cpm_expr.args
+
+            #    ... -c*b + ... <= k
+            # :: ... -c*(1 - ~b) + ... <= k
+            # :: ... -c + c* ~b + ... <= k
+            # :: ... + c*~b + ... <= k+c
+            if lhs.name == "wsum":
+                weights, args = lhs.args
+                # 1. Zip the two lists together to create a list of (weight, argument) pairs.
+                combined_pairs = zip(weights, args)
+
+                # 2. Sort the zipped pairs based on weight
+                sorted_pairs = sorted(combined_pairs, key=lambda x: -x[0])
+
+                # 3. Unzip the sorted pairs back into two separate lists using zip(*...)
+                sorted_weights, sorted_args = zip(*sorted_pairs)
+                # Simplify wsum to sum if all weights are 1
+                # if all(w == 1 for w in nw):
+                #     lhs = Operator("sum", [list(na)])
+                # else:
+                    # lhs = Operator("wsum", [list(nw), list(na)])
+                lhs = Operator("wsum", [sorted_weights, sorted_args]) # do not simplify because then breaks somewhere else
+
+            newlist.append(eval_comparison(cpm_expr.name, lhs, rhs))
+
+        # reification
+        elif isinstance(cpm_expr, Operator) and cpm_expr.name == "->":
+            cond, subexpr = cpm_expr.args
+            assert isinstance(cond, _BoolVarImpl), f"{cpm_expr} is not a supported linear expression. Apply " \
+                                                   f"`linearize_constraint` before calling `only_positive_coefficients` "
+            subexpr = sorted_coefficients([subexpr])
             newlist += [cond.implies(expr) for expr in subexpr]
 
         else:

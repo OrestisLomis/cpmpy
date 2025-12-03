@@ -232,7 +232,7 @@ class CPM_pindakaas(SolverInterface):
             raise TypeError
 
     def transform(self, cpm_expr):
-        cpm_cons = toplevel_list([cpm_expr[0]])
+        cpm_cons = toplevel_list(cpm_expr)
         cpm_cons = no_partial_functions(cpm_cons)
         cpm_cons = decompose_in_tree(cpm_cons, csemap=self._csemap)
         cpm_cons = simplify_boolean(cpm_cons)

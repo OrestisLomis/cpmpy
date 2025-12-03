@@ -22,6 +22,7 @@
 """
 
 import cpmpy as cp
+from cpmpy.transformations.get_variables import get_variables
 from cpmpy.transformations.normalize import toplevel_list
 
 def make_assump_model(soft, hard=[], name=None):
@@ -53,6 +54,8 @@ def is_normalised_pb(pb_expr):
 
         Returns True if the pseudo-Boolean expression is normalised, False otherwise.
     """
+    if isinstance(pb_expr, cp.expressions.variables._BoolVarImpl):
+        return True
     if not isinstance(pb_expr, cp.expressions.core.Comparison):
         return False
     if pb_expr.name != ">=":
@@ -77,8 +80,10 @@ def get_slack(pb_expr):
 
         Returns the slack as an integer.
     """
-    # if not is_normalised_pb(pb_expr):
-    #     raise ValueError(f"{pb_expr} is not a normalised pseudo-Boolean expression")
+    if not is_normalised_pb(pb_expr):
+        raise ValueError(f"{pb_expr} is not a normalised pseudo-Boolean expression")
+    if isinstance(pb_expr, cp.expressions.variables._BoolVarImpl):
+        return int(not is_false(pb_expr))
     lhs = pb_expr.args[0]
     rhs = pb_expr.args[1]
     slack = -rhs # start with the degree
@@ -133,7 +138,7 @@ def is_false(literal):
         
         :param: literal: a literal (int or boolvar)
     """
-    return not literal.value()
+    return literal.value() is False
 
 def get_degree_over_sum(pb_expr):
     """
@@ -225,17 +230,51 @@ def get_length(pb_expr):
     
     return length
 
+def get_length_gen(expr):
+    return len(get_variables(expr))
+
 # @profile
 def get_coefficient_lit(pb_expr, literal):
     """
         Get the coefficient of a literal in a pseudo-Boolean expression.
 
         :param: pb_expr: pseudo-Boolean expression (wsum of literals) >= degree (int)
-        :param: literal: a literal (int or boolvar)
+        :param: literal: a literal (boolvar)
     """
-    # if not is_normalised_pb(pb_expr):
-    #     raise ValueError(f"{pb_expr} is not a normalised pseudo-Boolean expression")
+    if not is_normalised_pb(pb_expr):
+        raise ValueError(f"{pb_expr} is not a normalised pseudo-Boolean expression")
+    if isinstance(pb_expr, cp.expressions.variables._BoolVarImpl):
+        if pb_expr == literal:
+            return 1
+        else:
+            return 0
+    
     lhs = pb_expr.args[0]
+    
+    if lhs.name == "wsum":
+        for i in range(len(lhs.args[0])):
+            if lhs.args[1][i].name == literal.name:
+                return lhs.args[0][i]
+    elif lhs.name == "sum":
+        for i in range(len(lhs.args)):
+            if lhs.args[i].name == literal.name:
+                return 1
+    return 0
+
+def get_coefficient_lit_linear(cpm_expr, literal):
+    """
+        Get the coefficient of a literal in a pseudo-Boolean expression.
+
+        :param: pb_expr: pseudo-Boolean expression (wsum of literals) >= degree (int)
+        :param: literal: a literal (boolvar)
+    """
+    if isinstance(cpm_expr, cp.expressions.variables._BoolVarImpl):
+        if cpm_expr == literal:
+            return 1
+        else:
+            return 0
+    
+    lhs = cpm_expr.args[0]
     
     if lhs.name == "wsum":
         for i in range(len(lhs.args[0])):
@@ -255,8 +294,14 @@ def get_coefficient_var(pb_expr, var):
         :param: pb_expr: pseudo-Boolean expression (wsum of literals) >= degree (int)
         :param: var: a variable (boolvar)
     """
-    # if not is_normalised_pb(pb_expr):
-    #     raise ValueError(f"{pb_expr} is not a normalised pseudo-Boolean expression")
+    if not is_normalised_pb(pb_expr):
+        raise ValueError(f"{pb_expr} is not a normalised pseudo-Boolean expression")
+    if isinstance(pb_expr, cp.expressions.variables._BoolVarImpl):
+        if var == pb_expr:
+            return 1
+        else:
+            return 0
+    
     lhs = pb_expr.args[0]
     
     if lhs.name == "wsum":
@@ -278,6 +323,9 @@ def get_lits(pb_expr):
     """
     # if not is_normalised_pb(pb_expr):
     #     raise ValueError(f"{pb_expr} is not a normalised pseudo-Boolean expression")
+    if isinstance(pb_expr, cp.expressions.variables._BoolVarImpl):
+       return [pb_expr] 
+    
     lhs = pb_expr.args[0]
     
     if lhs.name == "wsum":
@@ -296,6 +344,21 @@ def flip_literal(lit):
         lit._bv._value = not lit._bv.value()
     else:
         lit._value = not lit.value()
+        
+def get_bounds(constraint, lit, coefficient):
+    
+    if isinstance(constraint, cp.expressions.variables._BoolVarImpl):
+        return 0, 1
+    
+    
+    comp = constraint.name
+    lhs, rhs = constraint.args
+    
+    lhs_val = lhs.value()
+    
+    return lit.lb, lit.ub
+    
+    
 
 # @profile
 def rotate_model_old(constraints, constraint, depth=None, recursive=True, found=set(), hard=[]):
@@ -374,7 +437,7 @@ def rotate_model_old(constraints, constraint, depth=None, recursive=True, found=
 
     return
 
-def rotate_model(constraints, constraint, depth=None, recursive=True, found=set(), hard=[]):
+def rotate_model(constraints, constraint, depth=None, recursive=True, found=set(), hard=[]):    
     if depth == 0:
         return
     lits = get_lits(constraint)
@@ -390,6 +453,7 @@ def rotate_model(constraints, constraint, depth=None, recursive=True, found=set(
             bad_rot = False # flag to avoid bad rotations
             # loop over constraints in model, if only one will become false then add it to found and rotate recursively
             for constraint_check in constraints:
+                # print(constraint_check)
                 if constraint_check is constraint:
                     continue
                 neg_lit = ~lit
@@ -437,4 +501,316 @@ def rotate_model(constraints, constraint, depth=None, recursive=True, found=set(
     # print(f"Finished rotation at depth {depth}")
 
     return
+
+def rotate_model_group(groups, group_id, depth=None, recursive=True, found=set(), hard=[]):
+    group = groups[group_id]
+    if len(group) > 1:
+        return
+    else:
+        # print(group)
+        # print(group_id)
+        constraint = group[0]    
+    if depth == 0:
+        return
+    lits = get_lits(constraint)
+    slack = get_slack(constraint)
+    
+    for lit in lits:
+        if not is_false(lit):
+            continue
+        c = get_coefficient_lit(constraint, lit)
+        if c >= -slack:
+            count = 0
+            
+            flip_literal(lit)
+            
+            bad_rot = False # flag to avoid bad rotations
+            # loop over constraints in model, if only one will become false then add it to found and rotate recursively
+            for constraint_check in hard:
+                # print(constraint_check)
+                if constraint_check is constraint:
+                    continue
+                
+                if not constraint_check.value():
+                    bad_rot = True
+                    break
+                    
+            if not bad_rot:    
+                for id, g in groups:
+                    for c in g:
+                        if not c.value():
+                            if count == 1:
+                                bad_rot = True
+                                break
+                            last = id
+                            count += 1
+                                
+                    
+            if count == 1:
+                if bad_rot:
+                    continue
+                found.add(last)
+                
+                # rotated_assoc = assoc.copy()
+                # rotated_assoc[lits.index(lit)] = not assoc[lits.index(lit)]
+                if recursive:
+                    # print("Rotating model:", assoc)
+                    print(f"flipped {lit.name} to {lit.value()}")
+                    rotate_model_group(groups, last, depth=depth-1 if depth is not None else None, found=found, recursive=recursive)
+                    # print(f"flipped {lit.name} back to {lit.value()}")
+                
+                # print("Found constraint to rotate:", last)
+                # assoc = rotate_model(model, assoc, last)
+            flip_literal(lit)
+        else:
+            slack += c
+            flip_literal(lit)
+
+    
+    # for lit in flipped_lits:
+    #     flip_literal(lit) # fix the flipped literals
+    
+    # print(f"Finished rotation at depth {depth}")
+
+    return
+
+def rotate_model_group_linear(groups, group_id, depth=None, recursive=True, found=set(), hard=[]):
+    group = groups[group_id]
+    if len(group) > 1:
+        return
+    else:
+        constraint = group[0]    
+    if depth == 0:
+        return
+    lits = get_lits(constraint)
+    
+    for lit in lits:
         
+        curr_value = lit.value()
+        
+        c = get_coefficient_lit_linear(constraint, lit)
+        
+        lower, upper = get_bounds(constraint, lit, c)
+        
+        lower = lit.lb
+        upper = lit.ub
+        # if pos_contribution(lit, c, constraint):
+        #     continue
+        
+        for v in range(lower, upper+1):
+            if v == curr_value:
+                continue
+            
+        
+            lit._value = v
+            
+            if constraint.value():
+                count = 0
+                
+                
+                bad_rot = False # flag to avoid bad rotations
+                # loop over constraints in model, if only one will become false then add it to found and rotate recursively
+                for constraint_check in hard:
+                    # print(constraint_check)
+                    if constraint_check is constraint:
+                        continue
+                    
+                    if not constraint_check.value():
+                        bad_rot = True
+                        break
+                        
+                if not bad_rot:  
+                    for id, g in groups.items():
+                        for c in g:
+                            if not c.value():
+                                if count == 1:
+                                    bad_rot = True
+                                    break
+                                last = id
+                                count += 1
+                                    
+                        
+                if count == 1:
+                    if bad_rot:
+                        continue
+                    found.add(last)
+                    
+                    # rotated_assoc = assoc.copy()
+                    # rotated_assoc[lits.index(lit)] = not assoc[lits.index(lit)]
+                    if recursive:
+                        # print("Rotating model:", assoc)
+                        # print(f"flipped {lit.name} to {lit.value()}")
+                        rotate_model_group_linear(groups, last, depth=depth-1 if depth is not None else None, found=found, recursive=recursive)
+                        # print(f"flipped {lit.name} back to {lit.value()}")
+                    
+                    # print("Found constraint to rotate:", last)
+                    # assoc = rotate_model(model, assoc, last)
+        lit._value = curr_value
+
+    
+    # for lit in flipped_lits:
+    #     flip_literal(lit) # fix the flipped literals
+    
+    # print(f"Finished rotation at depth {depth}")
+
+    return
+        
+        
+def rotate_model_group_cp(groups, group_id, depth=None, recursive=True, found=set(), hard=[]):
+    group = groups[group_id]
+    if len(group) > 1:
+        return
+    else:
+        constraint = group[0]    
+    if depth == 0:
+        return
+    vars = get_variables(constraint)
+    
+    for var in vars:
+        
+        curr_value = var.value()
+        
+        lower = var.lb
+        upper = var.ub
+        
+        for v in range(lower, upper+1):
+            if v == curr_value:
+                continue
+            
+        
+            var._value = v
+            
+            
+            if constraint.value():
+            # if True:
+                # assert constraint.value() is False, f"After setting {var} to {v}, constraint {constraint} is False"
+                count = 0
+                
+                
+                bad_rot = False # flag to avoid bad rotations
+                # loop over constraints in model, if only one will become false then add it to found and rotate recursively
+                for constraint_check in hard:
+                    # print(constraint_check)
+                    if constraint_check is constraint:
+                        continue
+                    
+                    if constraint_check.value() is False:
+                        bad_rot = True
+                        break
+                        
+                print(f"in {constraint} the value of {var} was set to {var.value()} from {curr_value}")
+                
+                if not bad_rot:  
+                    for id, g in groups.items():
+                        for c in g:
+                            if c.value() is False:
+                                print(f"group {id} is now false because of {c}")
+                                print(f"count: {count + 1}")
+                                if count == 1:
+                                    bad_rot = True
+                                    break
+                                last = id
+                                count += 1
+                                break
+                        if bad_rot:
+                            break
+                                    
+                        
+                if count == 1:
+                    if bad_rot:
+                        continue
+                    found.add(last)
+                    
+                    # rotated_assoc = assoc.copy()
+                    # rotated_assoc[lits.index(lit)] = not assoc[lits.index(lit)]
+                    if recursive:
+                        # print("Rotating model:", assoc)
+                        # print(f"flipped {lit.name} to {lit.value()}")
+                        rotate_model_group_cp(groups, last, depth=depth-1 if depth is not None else None, found=found, recursive=recursive)
+                        # print(f"flipped {lit.name} back to {lit.value()}")
+                    
+                    # print("Found constraint to rotate:", last)
+                    # assoc = rotate_model(model, assoc, last)
+        var._value = curr_value
+
+    
+    # for lit in flipped_lits:
+    #     flip_literal(lit) # fix the flipped literals
+    
+    # print(f"Finished rotation at depth {depth}")
+
+    return
+
+def rotate_model_cp(constraints, constraint, depth=None, recursive=True, found=set(), hard=[]):
+    if depth == 0:
+        return
+    vars = get_variables(constraint)
+    
+    for var in vars:
+        
+        curr_value = var.value()
+        
+        lower = var.lb
+        upper = var.ub
+        
+        for v in range(lower, upper+1):
+            if v == curr_value:
+                continue
+            
+        
+            var._value = v
+            
+            
+            if constraint.value():
+            # if True:
+                # assert constraint.value() is False, f"After setting {var} to {v}, constraint {constraint} is False"
+                count = 0
+                
+                
+                bad_rot = False # flag to avoid bad rotations
+                # loop over constraints in model, if only one will become false then add it to found and rotate recursively
+                for constraint_check in hard+list(found):
+                    if constraint_check is constraint:
+                        continue
+                    # print(constraint_check)
+                    
+                    if constraint_check.value() is False:
+                        bad_rot = True
+                        break
+                
+                if not bad_rot:  
+                    for c in constraints:
+                        if c is constraint:
+                            continue
+                        if c.value() is False:
+                            if count == 1:
+                                bad_rot = True
+                                break
+                            last = c
+                            count += 1
+                                    
+                        
+                if count == 1:
+                    if bad_rot:
+                        continue
+                    found.add(last)
+                    
+                    # rotated_assoc = assoc.copy()
+                    # rotated_assoc[lits.index(lit)] = not assoc[lits.index(lit)]
+                    if recursive:
+                        # print("Rotating model:", assoc)
+                        # print(f"flipped {lit.name} to {lit.value()}")
+                        rotate_model_cp(constraints, last, depth=depth-1 if depth is not None else None, found=found, recursive=recursive)
+                        # print(f"flipped {lit.name} back to {lit.value()}")
+                    
+                    # print("Found constraint to rotate:", last)
+                    # assoc = rotate_model(model, assoc, last)
+        var._value = curr_value
+
+    
+    # for lit in flipped_lits:
+    #     flip_literal(lit) # fix the flipped literals
+    
+    # print(f"Finished rotation at depth {depth}")
+
+    return
