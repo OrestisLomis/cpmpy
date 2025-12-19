@@ -25,7 +25,7 @@ import copy
 import cpmpy as cp
 from cpmpy.transformations.get_variables import get_variables
 from cpmpy.expressions.utils import is_any_list
-from cpmpy.expressions.variables import NegBoolView
+from cpmpy.expressions.variables import _BoolVarImpl, NegBoolView
 from cpmpy.transformations.normalize import toplevel_list
 
 def make_assump_model(soft, hard=[], name=None):
@@ -57,6 +57,8 @@ def is_normalised_pb(pb_expr):
 
         Returns True if the pseudo-Boolean expression is normalised, False otherwise.
     """
+    if isinstance(pb_expr, cp.expressions.core.Operator) and pb_expr.name == "or":
+        return True
     if isinstance(pb_expr, cp.expressions.variables._BoolVarImpl):
         return True
     if not isinstance(pb_expr, cp.expressions.core.Comparison):
@@ -85,19 +87,28 @@ def get_slack(pb_expr):
     """
     if not is_normalised_pb(pb_expr):
         raise ValueError(f"{pb_expr} is not a normalised pseudo-Boolean expression")
-    if isinstance(pb_expr, cp.expressions.variables._BoolVarImpl):
-        return int(not is_false(pb_expr))
-    lhs = pb_expr.args[0]
-    rhs = pb_expr.args[1]
-    slack = -rhs # start with the degree
-    if lhs.name == "wsum":
-        for i in range(len(lhs.args[0])):
-            if not is_false(lhs.args[1][i]):
-                slack += lhs.args[0][i]
-    elif lhs.name == "sum":
-        for var in lhs.args:
-            if not is_false(var):
+    
+    if isinstance(pb_expr, cp.expressions.core.Operator):
+        # clause
+        slack = -1
+        for arg in pb_expr.args:
+            if not is_false(arg):
                 slack += 1
+    
+    elif isinstance(pb_expr, cp.expressions.variables._BoolVarImpl):
+        return int(not is_false(pb_expr)) - 1
+    else:
+        lhs = pb_expr.args[0]
+        rhs = pb_expr.args[1]
+        slack = -rhs # start with the degree
+        if lhs.name == "wsum":
+            for i in range(len(lhs.args[0])):
+                if not is_false(lhs.args[1][i]):
+                    slack += lhs.args[0][i]
+        elif lhs.name == "sum":
+            for var in lhs.args:
+                if not is_false(var):
+                    slack += 1
     return slack
 
 def slack_under(pb_expr, const):
@@ -117,21 +128,31 @@ def slack_under(pb_expr, const):
     
     # if not is_normalised_pb(pb_expr):
     #     raise ValueError(f"{pb_expr} is not a normalised pseudo-Boolean expression")
-    lhs = pb_expr.args[0]
-    rhs = pb_expr.args[1]
-    slack = -rhs # start with the degree
-    if lhs.name == "wsum":
-        for i in range(len(lhs.args[0])):
-            if not is_false(lhs.args[1][i]):
-                slack += lhs.args[0][i]
-                if slack >= const:
-                    return False
-    elif lhs.name == "sum":
-        for var in lhs.args:
-            if not is_false(var):
+    if isinstance(pb_expr, cp.expressions.variables._BoolVarImpl):
+        return pb_expr.value() - 1
+    elif isinstance(pb_expr, cp.expressions.core.Operator):
+        slack = -1
+        for arg in pb_expr.args:
+            if not is_false(arg):
                 slack += 1
                 if slack >= const:
                     return False
+    else:
+        lhs = pb_expr.args[0]
+        rhs = pb_expr.args[1]
+        slack = -rhs # start with the degree
+        if lhs.name == "wsum":
+            for i in range(len(lhs.args[0])):
+                if not is_false(lhs.args[1][i]):
+                    slack += lhs.args[0][i]
+                    if slack >= const:
+                        return False
+        elif lhs.name == "sum":
+            for var in lhs.args:
+                if not is_false(var):
+                    slack += 1
+                    if slack >= const:
+                        return False
     return True
 
 # @profile
@@ -224,6 +245,10 @@ def get_length(pb_expr):
     """
     if not is_normalised_pb(pb_expr):
         raise ValueError(f"{pb_expr} is not a normalised pseudo-Boolean expression")
+    
+    if isinstance(cp.expressions.core.Operator):
+        return len(pb_expr.args)
+    
     lhs = pb_expr.args[0]
     
     if lhs.name == "wsum":
@@ -327,7 +352,10 @@ def get_lits(pb_expr):
     # if not is_normalised_pb(pb_expr):
     #     raise ValueError(f"{pb_expr} is not a normalised pseudo-Boolean expression")
     if isinstance(pb_expr, cp.expressions.variables._BoolVarImpl):
-       return [pb_expr] 
+       return [pb_expr]
+   
+    if isinstance(pb_expr, cp.expressions.core.Operator):
+       return pb_expr.args 
     
     lhs = pb_expr.args[0]
     
@@ -440,11 +468,12 @@ def rotate_model_old(constraints, constraint, depth=None, recursive=True, found=
 
     return
 
-def rotate_model(constraints, constraint, depth=None, recursive=True, found=set(), hard=[]):    
+def rotate_model(constraints, constraint, criticals, depth=None, recursive=True, rots=set(), hard=[], block=True, seen=[], c_index=None, v_index=None, eager=False, cascade=True):    
     if depth == 0:
-        return
+        return set()
     lits = get_lits(constraint)
     slack = get_slack(constraint)
+    
     
     for lit in lits:
         if not is_false(lit):
@@ -465,12 +494,24 @@ def rotate_model(constraints, constraint, depth=None, recursive=True, found=set(
                 if under_const:
                     count += 1
                     last = constraint_check
+                    
+                    # print(seen)
+                    # print(v_index)
                     if constraint_check in hard:
                         bad_rot = True
                         break
-                    if constraint_check in found:
+                    if not eager and constraint_check in criticals:
                         bad_rot = True
                         break
+                    elif block and constraint_check in rots:
+                        bad_rot = True
+                        break
+                    elif not block and seen[c_index[constraint_check], v_index[get_var(lit)]]:
+                        bad_rot = True
+                        break
+                    
+                    if not block:
+                        seen[c_index[constraint_check], v_index[get_var(lit)]] = 1
                     
                     # print(f"Would become false: {last} by flipping {lit} which has coef {get_coefficient_lit(constraint_check, neg_lit)}")
                     if count > 1:
@@ -479,7 +520,8 @@ def rotate_model(constraints, constraint, depth=None, recursive=True, found=set(
             if count == 1:
                 if bad_rot:
                     continue
-                found.add(last)
+                rots.add(last)
+                
                 
                 # rotated_assoc = assoc.copy()
                 # rotated_assoc[lits.index(lit)] = not assoc[lits.index(lit)]
@@ -487,15 +529,18 @@ def rotate_model(constraints, constraint, depth=None, recursive=True, found=set(
                     # print("Rotating model:", assoc)
                     flip_literal(lit)
                     # print(f"flipped {lit.name} to {lit.value()}")
-                    rotate_model(constraints, last, depth=depth-1 if depth is not None else None, found=found, recursive=recursive)
+                    new_rots = rotate_model(constraints, last, criticals, depth=depth-1 if depth is not None else None, block=block, rots=rots, recursive=recursive, seen=seen, c_index=c_index, v_index=v_index, cascade=cascade)
+                    rots.update(new_rots)
                     flip_literal(lit)
                     # print(f"flipped {lit.name} back to {lit.value()}")
                 
                 # print("Found constraint to rotate:", last)
                 # assoc = rotate_model(model, assoc, last)
-        else:
+        elif cascade:
             slack += c
             flip_literal(lit)
+        else:
+            break
 
     
     # for lit in flipped_lits:
@@ -503,7 +548,7 @@ def rotate_model(constraints, constraint, depth=None, recursive=True, found=set(
     
     # print(f"Finished rotation at depth {depth}")
 
-    return
+    return rots
 
 def rotate_model_group(groups, group_id, depth=None, recursive=True, found=set(), hard=[]):
     group = groups[group_id]
@@ -817,6 +862,7 @@ def rotate_model_cp(constraints, constraint, depth=None, recursive=True, found=s
     # print(f"Finished rotation at depth {depth}")
 
     return
+
 def replace_cons_with_assump(cpm_cons, assump_map):
     """
         Replace soft constraints with assumption variables in a Boolean CPMpy expression.
@@ -836,6 +882,13 @@ def replace_cons_with_assump(cpm_cons, assump_map):
     elif isinstance(cpm_cons, NegBoolView):
         return ~replace_cons_with_assump(cpm_cons._bv, assump_map)
     return cpm_cons
+    
+def get_var(lit):
+    if isinstance(lit, NegBoolView):
+        return lit._bv
+    else:
+        assert isinstance(lit, _BoolVarImpl)
+        return lit
 
 class OCUSException(Exception):
     pass
