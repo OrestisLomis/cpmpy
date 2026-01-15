@@ -51,7 +51,7 @@ from pysat.formula import CNF
 
 import cpmpy as cp
 from cpmpy.tools.benchmark import _mib_as_bytes, _wall_time, set_memory_limit, set_time_limit, _bytes_as_mb, _bytes_as_gb, disable_memory_limit
-from cpmpy.tools.explain import mus, quickxplain, pb_mus
+from cpmpy.tools.explain import mus, quickxplain, pb_mus, cp_mus
 
 # # --- Configuration (Define these paths outside the function, e.g., in self or module globals) ---
 # OUTPUT_CNF_DIR = "/cw/dtailocal/orestis/benchmarks/2024/CNF/" 
@@ -648,6 +648,8 @@ class Benchmark(ABC):
     
             # ------------------------------ Parse instance ------------------------------ #
 
+            # print(f"Now solving: {instance}")
+            
             time_parse = time.time()
             model = self.read_instance(instance, open=open)
             time_parse = time.time() - time_parse
@@ -687,7 +689,7 @@ class Benchmark(ABC):
             
             time_solve = time.time()
             try:
-                mus_res, nb_rf, nb_mr, nb_symm, sat, unsat, total_solve_time = pb_mus(model.constraints, solver=solver, time_limit=time_limit, model_rotation=False, redundancy_removal=False, assumption_removal=False, use_symmetries=True, **solver_args)
+                mus_res, nb_rf, nb_mr, nb_symm, sat, unsat, total_solve_time = cp_mus(model.constraints, solver=solver, time_limit=time_limit, model_rotation=True, redundancy_removal=False, assumption_removal=False, use_symmetries=False, block=False, eager=True, **solver_args)
             except RuntimeError as e:
                 if "Program interrupted by user." in str(e): # Special handling for Exact
                     raise TimeoutError("Exact interrupted due to timeout")

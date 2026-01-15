@@ -316,7 +316,7 @@ class CPM_pumpkin(SolverInterface):
 
             :return: list of Expression
         """
-        # apply transformations
+        # apply transformations      
         cpm_cons = toplevel_list(cpm_expr)
         supported = {"alldifferent", "cumulative", "table", "negative_table", "InDomain"
                      "min", "max", "element", "abs"}
@@ -327,7 +327,7 @@ class CPM_pumpkin(SolverInterface):
         cpm_cons = only_implies(cpm_cons, csemap=self._csemap)
         supported_halfreif = {"or", "sum", "wsum", "sub", "mul", "div", "abs", "min", "max"}
         cpm_cons = reify_rewrite(cpm_cons, supported=supported_halfreif, csemap=self._csemap) # reified element not supported yet
-        supported_linear = {"or", "sum", "wsum", "sub", "mul", "div", "abs", "min", "max", "alldifferent", "cumulative", "table", "negative_table", "element"}
+        supported_linear = {"or", "sum", "wsum", "sub", "mul", "div", "abs", "min", "max", "alldifferent", "cumulative", "table", "negative_table", "element", "InDomain"}
         cpm_cons = linearize_constraint(cpm_cons, supported=supported_linear, csemap=self._csemap) # linearize unsupported constraints for pumpkin
         cpm_cons = only_numexpr_equality(cpm_cons, supported=frozenset(["sum", "wsum", "sub"]),csemap=self._csemap)  # supports >, <, !=
         cpm_cons = canonical_comparison(cpm_cons) # ensure rhs is always a constant
@@ -457,6 +457,7 @@ class CPM_pumpkin(SolverInterface):
         from pumpkin_solver import constraints
         if tag is None:
             tag = self.pum_solver.new_constraint_tag()
+
         if isinstance(cpm_expr, _BoolVarImpl):
             # base case, just var or ~var, post as clause
             return [constraints.Clause([self.solver_var(cpm_expr)], constraint_tag=tag)]
@@ -531,21 +532,21 @@ class CPM_pumpkin(SolverInterface):
 
             elif cpm_expr.name == "table":
                 arr, table = cpm_expr.args
-                return [constraints.Table(self.to_pum_ivar(arr), 
+                return [constraints.Table(self.to_pum_ivar(arr, tag=tag), 
                                           np.array(table).tolist(), # ensure Python list
                                           constraint_tag=tag)
                         ]
             
             elif cpm_expr.name == "negative_table":
                 arr, table = cpm_expr.args
-                return [constraints.NegativeTable(self.to_pum_ivar(arr), 
+                return [constraints.NegativeTable(self.to_pum_ivar(arr, tag=tag), 
                                                   np.array(table).tolist(),# ensure Python list
                                                   constraint_tag=tag)  
                         ]
             
             elif cpm_expr.name == "InDomain":
                 val, domain = cpm_expr.args
-                return [constraints.Table([self.to_pum_ivar(val)], 
+                return [constraints.Table([self.to_pum_ivar(val, tag=tag)], 
                                           np.array(domain).tolist(), # ensure Python list
                                           constraint_tag=tag)
                         ] 

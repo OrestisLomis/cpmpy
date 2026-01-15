@@ -31,7 +31,7 @@ from natsort import natsorted
 from cpmpy.tools.explain.symmetries import RowSymmetry, Permutation
 
 BREAKID_PATH = "/home/orestis_ubuntu/work/breakid/src/BreakID"
-BREAKID_PATH = "/home/orestis_ubuntu/work/BreakID-2.5"
+BREAKID_PATH = "/cw/dtailocal/orestis//BreakID-2.5"
 
 class BreakID:
     """
@@ -83,6 +83,7 @@ class BreakID:
         """
         tmp = tempfile.NamedTemporaryFile().name
         with open(tmp, "w") as f:
+            # print(input)
             f.write(input)
 
         parsed = self.parse_kwargs(kwargs | {"f": tmp})
@@ -216,7 +217,8 @@ class BreakID:
                 for r in range(n_rows):
                     for c, var_idx in enumerate(map(int, lines[i+r+1].strip().split(" "))):
                         matrix[r][c] = bvs[abs(var_idx)-1] if var_idx > 0 else ~bvs[abs(var_idx)-1]
-
+                
+                # print(subset)
                 # check which columns correspond to subset
                 if subset is not None:
                     np_matrix = np.array(matrix)
@@ -379,18 +381,39 @@ class BreakID:
         slv = CPM_pysat()
         
         constraints = toplevel_list(constraints)
-        constraints = decompose_in_tree(constraints,supported=frozenset({'alldifferent'}), csemap=slv._csemap)  # Alldiff has a specialzed MIP decomp
+        constraints = decompose_in_tree(constraints,supported=frozenset({'alldifferent'}))  # Alldiff has a specialzed MIP decomp
         constraints = simplify_boolean(constraints)
-        constraints = flatten_constraint(constraints, csemap=slv._csemap)  # flat normal form
-        constraints = reify_rewrite(constraints, supported=frozenset(['sum', 'wsum']), csemap=slv._csemap)  # constraints that support reification
-        constraints = only_numexpr_equality(constraints, supported=frozenset(["sum", "wsum"]), csemap=slv._csemap)  # supports >, <, !=
-        constraints = only_bv_reifies(constraints, csemap=slv._csemap)
-        constraints = only_implies(constraints, csemap=slv._csemap)  # anything that can create full reif should go above...
-        constraints = linearize_constraint(constraints, supported=frozenset({"sum", "wsum"}), csemap=slv._csemap)  # the core of the MIP-linearization
+        constraints = flatten_constraint(constraints)  # flat normal form
+        constraints = reify_rewrite(constraints, supported=frozenset(['sum', 'wsum']))  # constraints that support reification
+        constraints = only_numexpr_equality(constraints, supported=frozenset(["sum", "wsum"]))  # supports >, <, !=
+        constraints = only_bv_reifies(constraints)
+        constraints = only_implies(constraints)  # anything that can create full reif should go above...
+        constraints = linearize_constraint(constraints, supported=frozenset({"sum", "wsum"}))  # the core of the MIP-linearization
         constraints = int2bool(constraints, slv.ivarmap, encoding=slv.encoding)
-        constraints = only_positive_coefficients(constraints)
+        constraints = linearize_constraint(constraints, supported=frozenset({"sum", "wsum"}))  # the core of the MIP-linearization
+        constraints = only_positive_bv(constraints)
         
-        # print(constraints)
+        # slv = CPM_pysat() 
+        # constraints = toplevel_list(m.constraints)
+        # constraints = decompose_in_tree(constraints,supported=frozenset({'alldifferent'}), supported_reified=frozenset({'alldifferent'}), csemap=slv._csemap)  # Alldiff has a specialzed MIP decomp
+        # constraints = simplify_boolean(constraints)
+        # constraints = flatten_constraint(constraints)  # flat normal form
+        # constraints = reify_rewrite(constraints, supported=frozenset(['sum', 'wsum', 'alldifferent']))  # constraints that support reification
+        # constraints = only_numexpr_equality(constraints, supported=frozenset(["sum", "wsum", 'alldifferent']), csemap=slv._csemap)  # supports >, <, !=
+        # constraints = only_bv_reifies(constraints, csemap=slv._csemap)
+        # constraints = only_implies(constraints, csemap=slv._csemap)  # anything that can create full reif should go above...
+        # constraints = linearize_constraint(constraints, supported=frozenset({"sum", "wsum"}), csemap=slv._csemap)  # the core of the MIP-linearization
+        # constraints = int2bool(constraints, slv.ivarmap, encoding="binary")
+        # constraints = canonical_comparison(constraints)
+        # # constraints = only_ge_comparison(constraints)
+        # constraints = only_positive_coefficients(constraints)
+        # # constraints = sorted_coefficients(constraints)
+        
+        # for cons in constraints:
+        #     if cons.name == "->":
+        #         lhs, rhs = cons.args
+        #         if lhs.name.startswith("mus_sel"):
+        #             print(cons)
 
         def format_comparison(cons):
 
@@ -411,16 +434,18 @@ class BreakID:
                 cons = lhs >= rhs
 
             assert cons.name == ">="
-            return [cons]
-            return [format_wsum(lhs) + f" >= {rhs};"]
+            return [format_wsum(_to_wsum(lhs)) + f" >= {rhs};"]
 
         def format_wsum(wsum_expr):
             assert isinstance(wsum_expr, Operator) and wsum_expr.name == "wsum"
-
+            
             string = ""
             for w,v in zip(*wsum_expr.args):
-                string += " +" if w > 0 else " -"
-                string += f"{abs(w)} x{self._map[v]}"
+                if v in self._map: # skip variables that are not mapped due to optimizations
+                    string += " +" if w > 0 else " -"
+                    string += f"{abs(w)} x{self._map[v]}"
+                # else:
+                #     print(f"Skipping variable {v} in {wsum_expr} formatting, as it was optimized away")
             return string[1:] # remove leading space
 
         def _to_wsum(expr):
@@ -455,8 +480,15 @@ class BreakID:
 
         # keep map of variables to variable indices, used during parsing too
         self._map = {v : i+1 for i, v in enumerate(natsorted(get_variables(constraints), key=str))}
+        # print("Variable mapping:")
+        # for var in get_variables(constraints):
+        #     if var.name.startswith("mus_sel"):
+        #         print(f"  {var} -> x{self._map[var]}")
         
-        print(constraints)
+        # print("Variable mapping:")
+        # print(self._map)
+        
+        # print(constraints)
 
         for cons in constraints:
             """Constraints are weighted linear sums, or half-reification thereof"""
@@ -469,8 +501,10 @@ class BreakID:
 
             elif isinstance(cons, Operator) and cons.name == "->":
                 cond, subexpr = cons.args
+                if cond not in self._map:
+                    continue  # skip conditions that were optimized away
                 if isinstance(subexpr, _BoolVarImpl):
-                    str_cons += [Comparison(">=", Operator("wsum", [[1, 1], [~cond, subexpr]]), 1)]
+                    str_cons += format_comparison(Comparison(">=", Operator("wsum", [[1, 1], [~cond, subexpr]]), 1))
                 else:
                     assert isinstance(cond, _BoolVarImpl)
                     assert isinstance(subexpr, Comparison)
@@ -493,15 +527,15 @@ class BreakID:
                         raise ValueError(f"Unexpected comparison in reification: {cons}")
             else:
                 raise ValueError(f"Expected linear sum or reification thereof, but got {cons}")
-
+        
         if obj is not None:
            obj = "min: " + format_wsum(_to_wsum(obj)) + ";\n"
         else:
             obj = ""
 
-        # header = f"* #variable= {len(self._map)} #constraint= {len(str_cons)}\n"
-        # return header + obj + "\n".join(str_cons)
-        return str_cons
+        header = f"* #variable= {len(self._map)} #constraint= {len(str_cons)}\n"
+        # print(str_cons)
+        return header + obj + "\n".join(str_cons)
 
     def _parse_opb(self, string, sep=";"):
         """

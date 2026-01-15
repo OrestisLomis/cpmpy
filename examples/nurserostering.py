@@ -262,7 +262,7 @@ if __name__ == "__main__":
 
     dataset = NurseRosteringDataset(root=".", download=True, transform=parse_scheduling_period)
 
-    for i in range(len(dataset)):
+    for i in range(1):
         print(f"\n\n--- Instance {i}/{len(dataset)} ---")
         data, metadata = dataset[i]
 
@@ -316,7 +316,7 @@ if __name__ == "__main__":
                 for v in range(x.lb, x.ub+1):
                     if sol[i,j] == v: continue
                     rand = np.random.rand()
-                    if rand < 0.05:
+                    if rand < 0.5:
                         print(f"\tResult of asserting {x == v}:", end="\t")
                         alt_model = cp.Model(model.constraints)
                         alt_model.minimize(model.objective_)
@@ -343,13 +343,13 @@ if __name__ == "__main__":
                                 # You may want to use a unique filename (e.g., based on i and j)
                                 try:
                                     # pickle_path = f"/home/orestis_ubuntu/work/cpmpyfork/cp-mus-bench/{instance}-{i}-{j}-{v}_opt.pkl"
-                                    pickle_path = f"/cw/dtailocal/orestis/benchmarks/2024/nurse-unsat/{instance}-{i}-{j}-{v}_obj.pkl"
+                                    pickle_path = f"/cw/dtailocal/orestis/benchmarks/2024/cp-nurse-1/{instance}-{i}-{j}-{v}_obj.pkl"
                                     with open(pickle_path, 'wb') as f:
                                         pickle.dump(alt_model, f)
                                     print(f"(Saved model to {pickle_path})")
                                     count += 1
-                                    if count >= 30:
-                                        print("Reached 30 saved instances, moving to next instance.")
+                                    if count >= 50:
+                                        print("Reached 50 saved instances, moving to next instance.")
                                         break
                                 except Exception as e:
                                     print(f"Error saving model: {e}")
@@ -361,21 +361,21 @@ if __name__ == "__main__":
                             print("UNSAT", end="\t")
                             # If you want to run MUS analysis on the UNSAT core, you could also save here
                             try:
-                                pickle_path = f"/cw/dtailocal/orestis/benchmarks/2024/nurse-unsat/{instance}-{i}-{j}-{v}.pkl"
+                                pickle_path = f"/cw/dtailocal/orestis/benchmarks/2024/cp-nurse-1/{instance}-{i}-{j}-{v}.pkl"
                                 # pickle_path = f"/home/orestis_ubuntu/work/cpmpyfork/cp-mus-bench/{instance}-{i}-{j}-{v}.pkl"
                                 with open(pickle_path, 'wb') as f:
                                     pickle.dump(alt_model, f)
                                 print(f"(Saved model to {pickle_path})")
                                 count += 1
-                                if count >= 30:
-                                    print("Reached 30 saved instances, moving to next instance.")
+                                if count >= 50:
+                                    print("Reached 50 saved instances, moving to next instance.")
                                     break
                             except Exception as e:
                                 print(f"Error saving model: {e}")
                             # print("MUS size:",len(mus(alt_model.constraints, solver="exact")))
                         else:
                             print("UNKNOWN STATUS", end="\t")
-                if count >= 30:
+                if count >= 50:
                     break
-            if count >= 30:
+            if count >= 50:
                 break

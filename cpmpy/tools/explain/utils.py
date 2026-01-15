@@ -474,6 +474,9 @@ def rotate_model(constraints, constraint, criticals, depth=None, recursive=True,
     lits = get_lits(constraint)
     slack = get_slack(constraint)
     
+    import numpy as np
+    # print(np.sum(seen))
+    
     
     for lit in lits:
         if not is_false(lit):
@@ -497,6 +500,8 @@ def rotate_model(constraints, constraint, criticals, depth=None, recursive=True,
                     
                     # print(seen)
                     # print(v_index)
+                    # print(seen[c_index[constraint_check], v_index[get_var(lit)]])
+                    # print(np.sum(seen[c_index[constraint_check], :]))
                     if constraint_check in hard:
                         bad_rot = True
                         break
@@ -506,12 +511,15 @@ def rotate_model(constraints, constraint, criticals, depth=None, recursive=True,
                     elif block and constraint_check in rots:
                         bad_rot = True
                         break
-                    elif not block and seen[c_index[constraint_check], v_index[get_var(lit)]]:
+                    elif not block and (seen[c_index[constraint_check], v_index[get_var(lit)]] or np.sum(seen[c_index[constraint_check], :]) >= 1):
                         bad_rot = True
                         break
                     
                     if not block:
-                        seen[c_index[constraint_check], v_index[get_var(lit)]] = 1
+                        seen[c_index[constraint_check], v_index[get_var(lit)]] = True
+                    
+                    # print(constraint_check)
+                    # print(seen[c_index[constraint_check], :])
                     
                     # print(f"Would become false: {last} by flipping {lit} which has coef {get_coefficient_lit(constraint_check, neg_lit)}")
                     if count > 1:
@@ -547,6 +555,91 @@ def rotate_model(constraints, constraint, criticals, depth=None, recursive=True,
     #     flip_literal(lit) # fix the flipped literals
     
     # print(f"Finished rotation at depth {depth}")
+
+    return rots
+
+def rotate_model_cp(constraints, constraint, criticals, depth=None, recursive=True, rots=set(), hard=[], block=True, seen=[], c_index=None, v_index=None, eager=False):
+    if depth == 0:
+        return set()
+    
+    vars = get_variables(constraint)
+    
+    import numpy as np
+    
+    
+    for var in vars:
+        
+        curr_value = var.value()
+        
+        lower = var.lb
+        upper = var.ub
+        
+        for v in range(lower, upper+1):
+            if v == curr_value:
+                continue
+            
+        
+            var._value = v
+            if constraint.value():
+                
+                count = 0
+                
+                bad_rot = False # flag to avoid bad rotations
+                # loop over constraints in model, if only one will become false then add it to found and rotate recursively
+                for constraint_check in constraints:
+                    # print(constraint_check)
+                    if constraint_check is constraint:
+                        continue
+                    
+                    if constraint_check.value() is False:
+                        count += 1
+                        last = constraint_check
+                        
+                        # print(seen)
+                        # print(v_index)
+                        # print(seen[c_index[constraint_check], v_index[get_var(lit)]])
+                        # print(np.sum(seen[c_index[constraint_check], :]))
+                        if constraint_check in hard:
+                            bad_rot = True
+                            break
+                        if not eager and constraint_check in criticals:
+                            bad_rot = True
+                            break
+                        elif block and constraint_check in rots:
+                            bad_rot = True
+                            break
+                        elif not block and (seen[c_index[constraint_check], v_index[var]] or np.sum(seen[c_index[constraint_check], :]) >= 1):
+                            bad_rot = True
+                            break
+                        
+                        if not block:
+                            seen[c_index[constraint_check], v_index[var]] = True
+                        
+                        # print(constraint_check)
+                        # print(seen[c_index[constraint_check], :])
+                        
+                        # print(f"Would become false: {last} by flipping {lit} which has coef {get_coefficient_lit(constraint_check, neg_lit)}")
+                        if count > 1:
+                            # print("More than one constraint would become false, stopping rotation here")
+                            break
+                if count == 1:
+                    if bad_rot:
+                        continue
+                    rots.add(last)
+                    
+                    
+                    # rotated_assoc = assoc.copy()
+                    # rotated_assoc[lits.index(lit)] = not assoc[lits.index(lit)]
+                    if recursive:
+                        # print("Rotating model:", assoc)
+                        # print(f"flipped {lit.name} to {lit.value()}")
+                        new_rots = rotate_model_cp(constraints, last, criticals, depth=depth-1 if depth is not None else None, block=block, rots=rots, recursive=recursive, seen=seen, c_index=c_index, v_index=v_index)
+                        rots.update(new_rots)
+                        # print(f"flipped {lit.name} back to {lit.value()}")
+                    
+                    # print("Found constraint to rotate:", last)
+                    # assoc = rotate_model(model, assoc, last)
+        var._value = curr_value
 
     return rots
 
@@ -613,247 +706,6 @@ def rotate_model_group(groups, group_id, depth=None, recursive=True, found=set()
         else:
             slack += c
             flip_literal(lit)
-
-    
-    # for lit in flipped_lits:
-    #     flip_literal(lit) # fix the flipped literals
-    
-    # print(f"Finished rotation at depth {depth}")
-
-    return
-
-def rotate_model_group_linear(groups, group_id, depth=None, recursive=True, found=set(), hard=[]):
-    group = groups[group_id]
-    if len(group) > 1:
-        return
-    else:
-        constraint = group[0]    
-    if depth == 0:
-        return
-    lits = get_lits(constraint)
-    
-    for lit in lits:
-        
-        curr_value = lit.value()
-        
-        c = get_coefficient_lit_linear(constraint, lit)
-        
-        lower, upper = get_bounds(constraint, lit, c)
-        
-        lower = lit.lb
-        upper = lit.ub
-        # if pos_contribution(lit, c, constraint):
-        #     continue
-        
-        for v in range(lower, upper+1):
-            if v == curr_value:
-                continue
-            
-        
-            lit._value = v
-            
-            if constraint.value():
-                count = 0
-                
-                
-                bad_rot = False # flag to avoid bad rotations
-                # loop over constraints in model, if only one will become false then add it to found and rotate recursively
-                for constraint_check in hard:
-                    # print(constraint_check)
-                    if constraint_check is constraint:
-                        continue
-                    
-                    if not constraint_check.value():
-                        bad_rot = True
-                        break
-                        
-                if not bad_rot:  
-                    for id, g in groups.items():
-                        for c in g:
-                            if not c.value():
-                                if count == 1:
-                                    bad_rot = True
-                                    break
-                                last = id
-                                count += 1
-                                    
-                        
-                if count == 1:
-                    if bad_rot:
-                        continue
-                    found.add(last)
-                    
-                    # rotated_assoc = assoc.copy()
-                    # rotated_assoc[lits.index(lit)] = not assoc[lits.index(lit)]
-                    if recursive:
-                        # print("Rotating model:", assoc)
-                        # print(f"flipped {lit.name} to {lit.value()}")
-                        rotate_model_group_linear(groups, last, depth=depth-1 if depth is not None else None, found=found, recursive=recursive)
-                        # print(f"flipped {lit.name} back to {lit.value()}")
-                    
-                    # print("Found constraint to rotate:", last)
-                    # assoc = rotate_model(model, assoc, last)
-        lit._value = curr_value
-
-    
-    # for lit in flipped_lits:
-    #     flip_literal(lit) # fix the flipped literals
-    
-    # print(f"Finished rotation at depth {depth}")
-
-    return
-        
-        
-def rotate_model_group_cp(groups, group_id, depth=None, recursive=True, found=set(), hard=[]):
-    group = groups[group_id]
-    if len(group) > 1:
-        return
-    else:
-        constraint = group[0]    
-    if depth == 0:
-        return
-    vars = get_variables(constraint)
-    
-    for var in vars:
-        
-        curr_value = var.value()
-        
-        lower = var.lb
-        upper = var.ub
-        
-        for v in range(lower, upper+1):
-            if v == curr_value:
-                continue
-            
-        
-            var._value = v
-            
-            
-            if constraint.value():
-            # if True:
-                # assert constraint.value() is False, f"After setting {var} to {v}, constraint {constraint} is False"
-                count = 0
-                
-                
-                bad_rot = False # flag to avoid bad rotations
-                # loop over constraints in model, if only one will become false then add it to found and rotate recursively
-                for constraint_check in hard:
-                    # print(constraint_check)
-                    if constraint_check is constraint:
-                        continue
-                    
-                    if constraint_check.value() is False:
-                        bad_rot = True
-                        break
-                        
-                print(f"in {constraint} the value of {var} was set to {var.value()} from {curr_value}")
-                
-                if not bad_rot:  
-                    for id, g in groups.items():
-                        for c in g:
-                            if c.value() is False:
-                                print(f"group {id} is now false because of {c}")
-                                print(f"count: {count + 1}")
-                                if count == 1:
-                                    bad_rot = True
-                                    break
-                                last = id
-                                count += 1
-                                break
-                        if bad_rot:
-                            break
-                                    
-                        
-                if count == 1:
-                    if bad_rot:
-                        continue
-                    found.add(last)
-                    
-                    # rotated_assoc = assoc.copy()
-                    # rotated_assoc[lits.index(lit)] = not assoc[lits.index(lit)]
-                    if recursive:
-                        # print("Rotating model:", assoc)
-                        # print(f"flipped {lit.name} to {lit.value()}")
-                        rotate_model_group_cp(groups, last, depth=depth-1 if depth is not None else None, found=found, recursive=recursive)
-                        # print(f"flipped {lit.name} back to {lit.value()}")
-                    
-                    # print("Found constraint to rotate:", last)
-                    # assoc = rotate_model(model, assoc, last)
-        var._value = curr_value
-
-    
-    # for lit in flipped_lits:
-    #     flip_literal(lit) # fix the flipped literals
-    
-    # print(f"Finished rotation at depth {depth}")
-
-    return
-
-def rotate_model_cp(constraints, constraint, depth=None, recursive=True, found=set(), hard=[]):
-    if depth == 0:
-        return
-    vars = get_variables(constraint)
-    
-    for var in vars:
-        
-        curr_value = var.value()
-        
-        lower = var.lb
-        upper = var.ub
-        
-        for v in range(lower, upper+1):
-            if v == curr_value:
-                continue
-            
-        
-            var._value = v
-            
-            
-            if constraint.value():
-            # if True:
-                # assert constraint.value() is False, f"After setting {var} to {v}, constraint {constraint} is False"
-                count = 0
-                
-                
-                bad_rot = False # flag to avoid bad rotations
-                # loop over constraints in model, if only one will become false then add it to found and rotate recursively
-                for constraint_check in hard+list(found):
-                    if constraint_check is constraint:
-                        continue
-                    # print(constraint_check)
-                    
-                    if constraint_check.value() is False:
-                        bad_rot = True
-                        break
-                
-                if not bad_rot:  
-                    for c in constraints:
-                        if c is constraint:
-                            continue
-                        if c.value() is False:
-                            if count == 1:
-                                bad_rot = True
-                                break
-                            last = c
-                            count += 1
-                                    
-                        
-                if count == 1:
-                    if bad_rot:
-                        continue
-                    found.add(last)
-                    
-                    # rotated_assoc = assoc.copy()
-                    # rotated_assoc[lits.index(lit)] = not assoc[lits.index(lit)]
-                    if recursive:
-                        # print("Rotating model:", assoc)
-                        # print(f"flipped {lit.name} to {lit.value()}")
-                        rotate_model_cp(constraints, last, depth=depth-1 if depth is not None else None, found=found, recursive=recursive)
-                        # print(f"flipped {lit.name} back to {lit.value()}")
-                    
-                    # print("Found constraint to rotate:", last)
-                    # assoc = rotate_model(model, assoc, last)
-        var._value = curr_value
 
     
     # for lit in flipped_lits:

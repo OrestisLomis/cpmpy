@@ -120,12 +120,21 @@ class CNFBenchmark(Benchmark):
             self.print_status(CPExitStatus.unknown)
             
     def print_mus(self, mus_res, model):
-        bitstring = '0'*len(model.constraints)
-        for c in mus_res:
-            index = c.name.replace("mus_sel[", "").replace("]", "")
-            index = int(index)
-            bitstring = bitstring[:index] + '1' + bitstring[index+1:]
-        self.print_value(bitstring)
+        from cpmpy.transformations.normalize import toplevel_list
+        cs = toplevel_list(model.constraints)
+        
+        if len(cs) > 100000:
+            for c in mus_res:
+                index = c.name.replace("mus_sel[", "").replace("]", "")
+                result += f'{index} '
+        else:
+            bitstring = '0'*len(cs)
+            for c in mus_res:
+                index = c.name.replace("mus_sel[", "").replace("]", "")
+                index = int(index)
+                bitstring = bitstring[:index] + '1' + bitstring[index+1:]
+            result = bitstring
+        self.print_value(result)
 
     def handle_memory_error(self, mem_limit):
         super().handle_memory_error(mem_limit)

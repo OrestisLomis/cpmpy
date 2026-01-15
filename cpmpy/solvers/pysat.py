@@ -548,7 +548,7 @@ class CPM_pysat(SolverInterface):
         else:
             raise ValueError(f"PySAT: Expected Comparison to be either <=, ==, or >=, but was {cpm_expr.name}")
 
-    def _pysat_pseudoboolean(self, cpm_expr):
+    def _pysat_pseudoboolean(self, cpm_expr, conditional=None):
         """Convert CPMpy comparison of `wsum` (over Boolean variables) into PySAT list of clauses."""
         if self._pb is None:
             raise ImportError("The model contains a PB constraint, for which PySAT needs an additional dependency (PBLib). To install it, run `pip install pypblib`.")
@@ -562,6 +562,9 @@ class CPM_pysat(SolverInterface):
         lhs, rhs = cpm_expr.args
         lits = self.solver_vars(lhs.args[1])
         pysat_args = {"weights": lhs.args[0], "lits": lits, "bound": rhs, "vpool":self.pysat_vpool }
+        
+        if conditional is not None:
+            pysat_args["conditionals"] = [self.solver_var(conditional)]
 
 
         if cpm_expr.name == "<=":
