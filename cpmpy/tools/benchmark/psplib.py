@@ -1,20 +1,19 @@
 """
-MSE competition as a CPMpy benchmark
+PSPLIB as a CPMpy benchmark
 
-This module provides a benchmarking framework for running CPMpy on MaxSAT Evaluation (MSE) 
-competition instances encoded in WCNF (Weighted CNF) format. It extends the generic 
-`Benchmark` base class with MSE-specific logging and result reporting in DIMACS-like format.
+This module provides a benchmarking framework for running CPMpy on PSPLIB 
+instances.
 
 Command-line Interface
 ----------------------
-This script can be run directly to benchmark solvers on MSE datasets.
+This script can be run directly to benchmark solvers on PSPLIB datasets.
 
 Usage:
-    python mse.py --year 2024 --track exact-weighted --solver ortools
+    python psplib.py --year 2024 --variant rcpsp --family j30
 
 Arguments:
-    --year          Competition year (e.g., 2024).
-    --track         Track type (e.g., exact-weighted, exact-unweighted).
+    --variant       Problem variant (e.g., rcpsp).
+    --family        Problem family (e.g., j30, j120, ...)
     --solver        Solver name (e.g., ortools, exact, choco, ...).
     --workers       Number of parallel workers to use.
     --time-limit    Time limit in seconds per instance.
@@ -31,8 +30,7 @@ List of classes
 .. autosummary::
     :nosignatures:
 
-    MSEExitStatus
-    MSEBenchmark
+    PSPLIBBenchmark
 
 =================
 List of functions
@@ -41,7 +39,7 @@ List of functions
 .. autosummary::
     :nosignatures:
 
-    solution_mse
+    solution_psplib
 """
 
 import warnings
@@ -52,51 +50,38 @@ from datetime import datetime
 
 # CPMpy
 from cpmpy.tools.benchmark.runner import benchmark_runner
-from cpmpy.tools.benchmark._base import Benchmark
-from cpmpy.tools.wcnf import read_wcnf
+from cpmpy.tools.benchmark._base import Benchmark, ExitStatus
+from cpmpy.tools.rcpsp import read_rcpsp
 from cpmpy.solvers.solver_interface import ExitStatus as CPMStatus
 
 
-class MSEExitStatus(Enum):
-    unsupported:str = "UNSUPPORTED" # instance contains an unsupported feature (e.g. a unsupported global constraint)
-    sat:str = "SATISFIABLE" # CSP : found a solution | COP : found a solution but couldn't prove optimality
-    optimal:str = "OPTIMUM" + chr(32) + "FOUND" # optimal COP solution found
-    unsat:str = "UNSATISFIABLE" # instance is unsatisfiable
-    unknown:str = "UNKNOWN" # any other case
-
-def solution_mse(model):
+def solution_psplib(model):
     """
-    Convert a CPMpy model solution into the MSE solution string format.
+    Convert a CPMpy model solution into the solution string format.
 
     Arguments:
-        model (cp.solvers.SolverInterface): The solver-specific model for which to print its solution in MSE format.
+        model (cp.solvers.SolverInterface): The solver-specific model for which to print its solution
 
     Returns:
-        str: MSE-formatted solution string.
+        str: formatted solution string.
     """
-    variables = [var for var in model.user_vars if var.name[:2] == "BV"] # dirty workaround for all missed aux vars in user vars TODO fix with Ignace
-    variables = sorted(variables, key=lambda v: int("".join(filter(str.isdigit, v.name))))
-    return " ".join([str(1 if var.value() else 0) for var in variables])
+    variables = {var.name: var.value() for var in model.user_vars if var.name[:2] not in ["IV", "BV", "B#"]} # dirty workaround for all missed aux vars in user vars TODO fix with Ignace
+    return str(variables)
 
-class MSEBenchmark(Benchmark):
+class PSPLIBBenchmark(Benchmark):
 
     """
-    MSE (MaxSAT Evaluation) competition as a CPMpy benchmark.
-
-    This class extends `Benchmark` to implement MSE-specific solution printing
-    in DIMACS-like output format (`c`, `s`, `v`, `o` lines). It uses CPMpy's `read_wcnf`
-    to parse WCNF (Weighted CNF) instances and runs them on a selected solver supported 
-    by CPMpy.
+    PSPLIB as a CPMpy benchmark.
     """
 
     def __init__(self):
-        self._sol_time = None
-        super().__init__(reader=read_wcnf, exit_status=MSEExitStatus)
+        self.sol_time = None
+        super().__init__(reader=read_rcpsp) # TODO: reader should depend on problem variant
     
     def print_comment(self, comment:str):
         print('c' + chr(32) + comment.rstrip('\n'), end="\r\n", flush=True)
 
-    def print_status(self, status: MSEExitStatus) -> None:
+    def print_status(self, status: ExitStatus) -> None:
         print('s' + chr(32) + status.value, end="\n", flush=True)
 
     def print_value(self, value: str) -> None:
@@ -111,29 +96,29 @@ class MSEBenchmark(Benchmark):
     def print_result(self, s):
         if s.status().exitstatus == CPMStatus.OPTIMAL:
             self.print_objective(s.objective_value())
-            self.print_value(solution_mse(s))
-            self.print_status(MSEExitStatus.optimal)
+            self.print_value(solution_psplib(s))
+            self.print_status(ExitStatus.optimal)
         elif s.status().exitstatus == CPMStatus.FEASIBLE:
             self.print_objective(s.objective_value())
-            self.print_value(solution_mse(s))
-            self.print_status(MSEExitStatus.sat)
+            self.print_value(solution_psplib(s))
+            self.print_status(ExitStatus.sat)
         elif s.status().exitstatus == CPMStatus.UNSATISFIABLE:
-            self.print_status(MSEExitStatus.unsat)
+            self.print_status(ExitStatus.unsat)
         else:
             self.print_comment("Solver did not find any solution within the time/memory limit")
-            self.print_status(MSEExitStatus.unknown)
+            self.print_status(ExitStatus.unknown)
 
     def handle_memory_error(self, mem_limit):
         super().handle_memory_error(mem_limit)
-        self.print_status(MSEExitStatus.unknown)
+        self.print_status(ExitStatus.unknown)
 
     def handle_not_implemented(self, e):
         super().handle_not_implemented(e)
-        self.print_status(MSEExitStatus.unsupported)
+        self.print_status(ExitStatus.unsupported)
 
     def handle_exception(self, e):
         super().handle_exception(e)
-        self.print_status(MSEExitStatus.unknown)
+        self.print_status(ExitStatus.unknown)
 
     
     def handle_sigterm(self):
@@ -141,7 +126,7 @@ class MSEBenchmark(Benchmark):
         Handles a SIGTERM. Gives us 1 second to finish the current job before we get killed.
         """
         # Report that we haven't found a solution in time
-        self.print_status(MSEExitStatus.unknown)
+        self.print_status(ExitStatus.unknown)
         self.print_comment("SIGTERM raised.")
         return 0
         
@@ -150,7 +135,7 @@ class MSEBenchmark(Benchmark):
         Handles a SIGXCPU.
         """
         # Report that we haven't found a solution in time
-        self.print_status(MSEExitStatus.unknown)
+        self.print_status(ExitStatus.unknown)
         self.print_comment("SIGXCPU raised.")
         return 0
 
@@ -167,13 +152,13 @@ class MSEBenchmark(Benchmark):
         elif line.startswith('c Solution'):
             parts = line.split(', time = ')
             # Get solution time from comment for intermediate solution -> used for annotating 'o ...' lines
-            self._sol_time = float(parts[-1].replace('s', '').rstrip())
+            self.sol_time = float(parts[-1].replace('s', '').rstrip())
         elif line.startswith('o '):
             obj = int(line[2:].strip())
             if result['intermediate'] is None:
                 result['intermediate'] = []
-            if self._sol_time is not None:
-                result['intermediate'] += [(self._sol_time, obj)]
+            if self.sol_time is not None:
+                result['intermediate'] += [(self.sol_time, obj)]
             result['objective_value'] = obj
             obj = None
         elif line.startswith('c took '):
@@ -193,9 +178,9 @@ class MSEBenchmark(Benchmark):
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description='Benchmark solvers on MSE instances')
-    parser.add_argument('--year', type=int, required=True, help='Competition year (e.g., 2024)')
-    parser.add_argument('--track', type=str, required=True, help='Track type (e.g., exact-weighted, exact-unweighted)')
+    parser = argparse.ArgumentParser(description='Benchmark solvers on PSPLIB instances')
+    parser.add_argument('--variant', type=str, required=True, help='Problem variant (e.g., rcpsp)')
+    parser.add_argument('--family', type=str, required=True, help='Problem family (e.g., j30, j120, ...)')
     parser.add_argument('--solver', type=str, required=True, help='Solver name (e.g., ortools, exact, choco, ...)')
     parser.add_argument('--workers', type=int, default=4, help='Number of parallel workers')
     parser.add_argument('--time-limit', type=int, default=300, help='Time limit in seconds per instance')
@@ -212,8 +197,8 @@ if __name__ == "__main__":
         warnings.filterwarnings("ignore")
     
     # Load benchmark instances (as a dataset)
-    from cpmpy.tools.dataset.model.mse import MSEDataset
-    dataset = MSEDataset(year=args.year, track=args.track, download=True)
+    from cpmpy.tools.dataset.problem.psplib import PSPLibDataset
+    dataset = PSPLibDataset(variant=args.variant, family=args.family, download=True)
     
     # Create output directory
     output_dir = Path(args.output_dir)
@@ -223,9 +208,9 @@ if __name__ == "__main__":
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
     # Define output file path with timestamp
-    output_file = str(output_dir / "mse" / f"mse_{args.year}_{args.track}_{args.solver}_{timestamp}.csv")
+    output_file = str(output_dir / "psplib" / f"psplib_{args.variant}_{args.family}_{args.solver}_{timestamp}.csv")
 
     # Run the benchmark
-    instance_runner = MSEBenchmark()
+    instance_runner = PSPLIBBenchmark()
     output_file = benchmark_runner(dataset=dataset, instance_runner=instance_runner, output_file=output_file, **vars(args))
     print(f"Results added to {output_file}")

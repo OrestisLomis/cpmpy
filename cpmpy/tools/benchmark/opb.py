@@ -93,6 +93,7 @@ class OPBBenchmark(Benchmark):
     """
 
     def __init__(self):
+        self.sol_time = None
         super().__init__(reader=read_opb, exit_status=OPBExitStatus)
     
     def print_comment(self, comment:str):
@@ -176,29 +177,24 @@ class OPBBenchmark(Benchmark):
         if line.startswith('s '):
             result['status'] = line[2:].strip()
         elif line.startswith('v '):
-            start = time.time()
             # only record first line, contains 'type' and 'cost'
-            solution_part = line.split("\n")[0][2:].strip()
-           # 2. Check if the solution field is currently empty (None)
-            if result.get('solution') is None:
-                # First time seeing a 'v ' line: initialize the solution string
-                result['solution'] = solution_part
+            solution = line.split("\n")[0][2:].strip()
+            if solution not in result:
+                result['solution'] = solution
             else:
-                # Subsequent 'v ' lines: concatenate the part with a space separator
-                # This correctly collects the full, potentially multi-line solution
-                result['solution'] += solution_part
-            end = time.time()
+                result['solution'] = result['solution'] + ' ' + str(solution)
+        elif line.startswith('c Solution'):
+            parts = line.split(', time = ')
+            # Get solution time from comment for intermediate solution -> used for annotating 'o ...' lines
+            self.sol_time = float(parts[-1].replace('s', '').rstrip())
         elif line.startswith('o '):
             obj = int(line[2:].strip())
             if result['intermediate'] is None:
                 result['intermediate'] = []
-            result['intermediate'] += [(sol_time, obj)]
+            if self.sol_time is not None:
+                result['intermediate'] += [(self.sol_time, obj)]
             result['objective_value'] = obj
             obj = None
-        elif line.startswith('c Solution'):
-            parts = line.split(', time = ')
-            # Get solution time from comment for intermediate solution -> used for annotating 'o ...' lines
-            sol_time = float(parts[-1].replace('s', '').rstrip())
         elif line.startswith('c took '):
             # Parse timing information
             parts = line.split(' seconds to ')
