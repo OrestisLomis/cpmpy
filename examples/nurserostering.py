@@ -255,6 +255,47 @@ def nurserostering_model(horizon, shifts:pd.DataFrame, staff, days_off, shift_on
 
     return model, nurse_view
 
+import matplotlib.pyplot as plt
+import numpy as np
+
+def plot_runtime_evolution(runtimes, instances_names=None, save=False):
+    # X-axis represents the percentage steps (0.1 to 1.0)
+    percentages = [round(0.1 * k, 1) for k in range(1, 5)]
+    
+    plt.figure(figsize=(12, 7))
+    
+    # Use a colormap to distinguish 20 different lines
+    colors = plt.cm.tab20(np.linspace(0, 1, len(runtimes)))
+
+    for i, instance_runs in enumerate(runtimes):
+        if i <= 10:
+            continue
+        label = instances_names[i] if instances_names else f"Instance {i}"
+        print(f"Plotting runtimes for {label}: {instance_runs}")
+        print(f"Percentages: {percentages}")
+        plt.plot(percentages, instance_runs, marker='o', markersize=4, 
+                 linestyle='-', alpha=0.6, color=colors[i], label=label)
+
+    # # Plot the average runtime across all instances to see the general trend
+    # avg_runtimes = np.mean(runtimes, axis=0)
+    # plt.plot(percentages, avg_runtimes, color='black', linewidth=3, 
+    #          linestyle='--', label='Average Trend', zorder=10)
+
+    # Formatting
+    plt.yscale('log') # Runtimes often vary exponentially
+    plt.xlabel("Constraint Percentage (pct * best_sol)")
+    plt.ylabel("Runtime (sec) - Log Scale")
+    plt.title("Runtime Complexity per Instance as Objective Tightens")
+    plt.xticks(percentages)
+    plt.grid(True, which="both", ls="-", alpha=0.2)
+    
+    # Move legend outside if it's too big
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize='small', ncol=1)
+    
+    plt.tight_layout()
+    plt.savefig("nurserostering_runtime_evolution_real_diff.png", dpi=300)
+
+
 if __name__ == "__main__":
     
     import numpy as np
@@ -262,120 +303,160 @@ if __name__ == "__main__":
 
     dataset = NurseRosteringDataset(root=".", download=True, transform=parse_scheduling_period)
 
-    for i in range(1):
+    best_sols = [607, 828, 1001, 1716, 1143, 1950, 1056, 1300, 439, 4631, 3443, 4040, 1348, 1278, 3828, 3225, 5746, 4459, 3149, 4769, 21133, 30241, 17285, 33724]
+    
+    runtimes = [[] for _ in range(len(best_sols))]
+    for i in range(len(best_sols)):
+        
+        if i != len(best_sols)-1:
+            continue
+        
         print(f"\n\n--- Instance {i}/{len(dataset)} ---")
         data, metadata = dataset[i]
 
-        for key, value in data.items():
-            print(key,":")
-            print(value)
+        # for key, value in data.items():
+        #     print(key,":")
+        #     print(value)
 
         model, nurse_view = nurserostering_model(**data)
-        model.solve(time_limit=600)
+        # model.solve(time_limit=600)
         
         from cpmpy.solvers.solver_interface import ExitStatus
-        if model.status().exitstatus != ExitStatus.OPTIMAL:
-            print("No optimal solution found")
-            continue
+        # if model.status().exitstatus != ExitStatus.OPTIMAL:
+        #     print("No optimal solution found")
+        #     continue
 
-        print(f"Found optimal solution with penalty of {model.objective_value()}")
+        # print(f"Found optimal solution with penalty of {model.objective_value()}")
 
         # pretty print solution
-        names = ["-"] + data['shifts'].index.tolist()
-        sol = nurse_view.value()
-        df = pd.DataFrame(sol, index=data['staff'].name).map(names.__getitem__)
+        # names = ["-"] + data['shifts'].index.tolist()
+        # sol = nurse_view.value()
+        # df = pd.DataFrame(sol, index=data['staff'].name).map(names.__getitem__)
 
-        for shift, _ in data['shifts'].iterrows():
-            df.loc[f'Cover {shift}'] = ""
+        # for shift, _ in data['shifts'].iterrows():
+        #     df.loc[f'Cover {shift}'] = ""
 
-        for _, cover_request in data['cover'].iterrows():
-            shift = cover_request['ShiftID']
-            num_shifts = sum(df[cover_request['Day']] == shift)
-            df.loc[f"Cover {shift}",cover_request['Day']] = f"{num_shifts}/{cover_request['Requirement']}"
+        # for _, cover_request in data['cover'].iterrows():
+        #     shift = cover_request['ShiftID']
+        #     num_shifts = sum(df[cover_request['Day']] == shift)
+        #     df.loc[f"Cover {shift}",cover_request['Day']] = f"{num_shifts}/{cover_request['Requirement']}"
 
-        days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-        df.columns = [days[(int(col)) % 7] for col in df.columns]
+        # days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        # df.columns = [days[(int(col)) % 7] for col in df.columns]
 
-        print(df.to_markdown())
+        # print(df.to_markdown())
         
-        from cpmpy.tools.explain import mus
-        assert model.solve()
-        sol = nurse_view.value()
-        opt_val = model.objective_value()
+        # from cpmpy.tools.explain import mus
+        # assert model.solve()
+        # sol = nurse_view.value()
+        opt_val = best_sols[i]
         print("Objective value:",opt_val)
 
         instance = metadata['name']
 
         import pickle
         
-        count = 0
+        for pct in [0.25*k for k in range(1,5)]:
+            alt_model = cp.Model(model.constraints)
+                
+            alt_model += model.objective_ < int(opt_val * pct)
+            print(f"Testing alternative assignments for {instance} with objective < {int(opt_val * pct)} and pct={pct}:")
+#             tl = 600
+#             alt_model.solve(time_limit=tl)
+            
+#             if alt_model.status().exitstatus == ExitStatus.UNSATISFIABLE:
+#                 runtimes[i].append(alt_model.status().runtime)
+#             else:
+#                 print(f"Instance {i+1} with pct={pct} did not become UNSAT within time limit of {tl} seconds.")
+#                 break
+#             # runtimes[i].append(alt_model.status().runtime if alt_model.status().exitstatus == ExitStatus.UNSATISFIABLE else 2*tl)
+#         runtimes[i].extend([2*tl] * (4 - len(runtimes[i])))
+#         print("Current runtimes:", runtimes[i])
+#         plot_runtime_evolution(runtimes[:i+1])
+            
+#     print("Runtimes (in seconds) for each instance and pct levels:")
+#     for i, runtime_list in enumerate(runtimes):
+#         print(f"Instance {i}: {runtime_list}")
+        
+    
+# plot_runtime_evolution(runtimes, save=True)
+            try:
+                pickle_path = f"/home/orestis_ubuntu/work/benchmarks/2024/cp-nurse-diff/{instance}-{pct}.pkl"
+                # pickle_path = f"/cw/dtailocal/orestis/benchmarks/2024/cp-nurse-1/{instance}-{i}-{j}-{v}_obj.pkl"
+                with open(pickle_path, 'wb') as f:
+                    pickle.dump(alt_model, f)
+                print(f"(Saved model to {pickle_path})")
+            except Exception as e:
+                print(f"Error saving model: {e}")
+        
+        # count = 0
 
-        for i, row in enumerate(nurse_view):
-            print(f"Testing alternative assignments for {data['staff'].iloc[i]['name']}")
-            for j, x in enumerate(row):
-                for v in range(x.lb, x.ub+1):
-                    if sol[i,j] == v: continue
-                    rand = np.random.rand()
-                    if rand < 0.5:
-                        print(f"\tResult of asserting {x == v}:", end="\t")
-                        alt_model = cp.Model(model.constraints)
-                        alt_model.minimize(model.objective_)
-                        alt_model += nurse_view[i,j] == v
+        # for i, row in enumerate(nurse_view):
+        #     print(f"Testing alternative assignments for {data['staff'].iloc[i]['name']}")
+        #     for j, x in enumerate(row):
+        #         for v in range(x.lb, x.ub+1):
+        #             if sol[i,j] == v: continue
+        #             rand = np.random.rand()
+        #             if rand < 0.5:
+        #                 print(f"\tResult of asserting {x == v}:", end="\t")
+        #                 alt_model = cp.Model(model.constraints)
+        #                 alt_model.minimize(model.objective_)
+        #                 alt_model += nurse_view[i,j] == v
                         
-                        status = alt_model.solve(time_limit=600)
+        #                 status = alt_model.solve(time_limit=600)
                         
-                        if status:
-                            current_obj_val = alt_model.objective_value()
+        #                 if status:
+        #                     current_obj_val = alt_model.objective_value()
                             
-                            if current_obj_val == opt_val:
-                                print("Alternative solution with equal objective.")
+        #                     if current_obj_val == opt_val:
+        #                         print("Alternative solution with equal objective.")
                             
-                            else: # The solution is worse than the optimal value
-                                print(f"Results in worse solution ({current_obj_val})", end="\t")
+        #                     else: # The solution is worse than the optimal value
+        #                         print(f"Results in worse solution ({current_obj_val})", end="\t")
                                 
-                                # ----------------------------------------------------
-                                # 1. ADD THE CONSTRAINT THAT MAKES IT UNSAT IF YOU WANT TO RUN MUS
-                                cons = alt_model.objective_ == opt_val
-                                # cons.set_description("Restrict objective")
-                                alt_model += cons
+        #                         # ----------------------------------------------------
+        #                         # 1. ADD THE CONSTRAINT THAT MAKES IT UNSAT IF YOU WANT TO RUN MUS
+        #                         cons = alt_model.objective_ == opt_val
+        #                         # cons.set_description("Restrict objective")
+        #                         alt_model += cons
                                 
-                                # 2. SAVE THE MODEL USING PICKLE
-                                # You may want to use a unique filename (e.g., based on i and j)
-                                try:
-                                    # pickle_path = f"/home/orestis_ubuntu/work/cpmpyfork/cp-mus-bench/{instance}-{i}-{j}-{v}_opt.pkl"
-                                    pickle_path = f"/cw/dtailocal/orestis/benchmarks/2024/cp-nurse-1/{instance}-{i}-{j}-{v}_obj.pkl"
-                                    with open(pickle_path, 'wb') as f:
-                                        pickle.dump(alt_model, f)
-                                    print(f"(Saved model to {pickle_path})")
-                                    count += 1
-                                    if count >= 50:
-                                        print("Reached 50 saved instances, moving to next instance.")
-                                        break
-                                except Exception as e:
-                                    print(f"Error saving model: {e}")
+        #                         # 2. SAVE THE MODEL USING PICKLE
+        #                         # You may want to use a unique filename (e.g., based on i and j)
+        #                         try:
+        #                             # pickle_path = f"/home/orestis_ubuntu/work/cpmpyfork/cp-mus-bench/{instance}-{i}-{j}-{v}_opt.pkl"
+        #                             pickle_path = f"/cw/dtailocal/orestis/benchmarks/2024/cp-nurse-1/{instance}-{i}-{j}-{v}_obj.pkl"
+        #                             with open(pickle_path, 'wb') as f:
+        #                                 pickle.dump(alt_model, f)
+        #                             print(f"(Saved model to {pickle_path})")
+        #                             count += 1
+        #                             if count >= 50:
+        #                                 print("Reached 50 saved instances, moving to next instance.")
+        #                                 break
+        #                         except Exception as e:
+        #                             print(f"Error saving model: {e}")
                                 
-                                # print("MUS size:", len(mus(alt_model.constraints, solver="exact")))
-                                # ----------------------------------------------------
+        #                         # print("MUS size:", len(mus(alt_model.constraints, solver="exact")))
+        #                         # ----------------------------------------------------
                         
-                        elif status is False: # UNSAT case
-                            print("UNSAT", end="\t")
-                            # If you want to run MUS analysis on the UNSAT core, you could also save here
-                            try:
-                                pickle_path = f"/cw/dtailocal/orestis/benchmarks/2024/cp-nurse-1/{instance}-{i}-{j}-{v}.pkl"
-                                # pickle_path = f"/home/orestis_ubuntu/work/cpmpyfork/cp-mus-bench/{instance}-{i}-{j}-{v}.pkl"
-                                with open(pickle_path, 'wb') as f:
-                                    pickle.dump(alt_model, f)
-                                print(f"(Saved model to {pickle_path})")
-                                count += 1
-                                if count >= 50:
-                                    print("Reached 50 saved instances, moving to next instance.")
-                                    break
-                            except Exception as e:
-                                print(f"Error saving model: {e}")
-                            # print("MUS size:",len(mus(alt_model.constraints, solver="exact")))
-                        else:
-                            print("UNKNOWN STATUS", end="\t")
-                if count >= 50:
-                    break
-            if count >= 50:
-                break
+        #                 elif status is False: # UNSAT case
+        #                     print("UNSAT", end="\t")
+        #                     # If you want to run MUS analysis on the UNSAT core, you could also save here
+        #                     try:
+        #                         pickle_path = f"/cw/dtailocal/orestis/benchmarks/2024/cp-nurse-1/{instance}-{i}-{j}-{v}.pkl"
+        #                         # pickle_path = f"/home/orestis_ubuntu/work/cpmpyfork/cp-mus-bench/{instance}-{i}-{j}-{v}.pkl"
+        #                         with open(pickle_path, 'wb') as f:
+        #                             pickle.dump(alt_model, f)
+        #                         print(f"(Saved model to {pickle_path})")
+        #                         count += 1
+        #                         if count >= 50:
+        #                             print("Reached 50 saved instances, moving to next instance.")
+        #                             break
+        #                     except Exception as e:
+        #                         print(f"Error saving model: {e}")
+        #                     # print("MUS size:",len(mus(alt_model.constraints, solver="exact")))
+        #                 else:
+        #                     print("UNKNOWN STATUS", end="\t")
+        #         if count >= 50:
+        #             break
+        #     if count >= 50:
+        #         break
