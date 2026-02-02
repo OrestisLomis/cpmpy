@@ -5,13 +5,13 @@ from setuptools.namespaces import flatten
 # This cpmpy example solves a sudoku by marty_sears, which can be found on https://logic-masters.de/Raetselportal/Raetsel/zeigen.php?id=000JUJ
 
 # sudoku cells
-cells = cp.intvar(1,6, shape=(6,6))
+cells = cp.intvar(1,6, shape=(6,6), name="cell")
 # duplicates in rows and columns
-duplicate_rs = cp.intvar(1,6, shape=6)
-duplicate_cs = cp.intvar(1,6, shape=6)
+duplicate_rs = cp.intvar(1,6, shape=6, name="dup_row")
+duplicate_cs = cp.intvar(1,6, shape=6, name="dup_col")
 # removals in rows and columns
-removals_rs = cp.intvar(1,6, shape=6)
-removals_cs = cp.intvar(1,6, shape=6)
+removals_rs = cp.intvar(1,6, shape=6, name="rem_row")
+removals_cs = cp.intvar(1,6, shape=6, name="rem_col")
 
 def white_kropki(a, b):
     # digits separated by a white dot differ by 1
@@ -25,7 +25,7 @@ def zipper(args):
     # equidistant cells from the middle, sum to the value in the value in the middle
     assert len(args) % 2 == 1
     mid = len(args) // 2
-    return cp.all([args[i] + args[len(args)-1-i] == args[mid] for i in range(mid)])
+    return [args[i] + args[len(args)-1-i] == args[mid] for i in range(mid)]
 
 def X(a, b):
     # digits separated by an X sum to 10
@@ -33,7 +33,7 @@ def X(a, b):
 
 def renban(args):
     # digits on a pink renban form a set of consecutive non repeating digits
-    return cp.all([cp.AllDifferent(args), cp.max(args) - cp.min(args) == len(args) - 1])
+    return [cp.AllDifferent(args), cp.max(args) - cp.min(args) == len(args) - 1]
 
 def cage(args, total):
     # digits in a cage sum to the given total
@@ -47,11 +47,11 @@ def duplicate(array, doppel):
     # any vars in a pair cannot be equal to a third var
     # pairs implying a decision var blocks multiple pairs from existing
     # we know there will be at least one duplicate because of the removal constraints
-    return cp.all([(var1 == var2).implies(cp.all([var1==doppel, var1 != var3])) for var1, var2, var3 in all_triplets])
+    return [(var1 == var2).implies(cp.all([var1==doppel, var1 != var3])) for var1, var2, var3 in all_triplets]
 
 def missing(array, removed):
     # every row and column has one missing digit
-    return cp.all([removed != elm for elm in array])
+    return [removed != elm for elm in array]
 
 m = cp.Model(
     # zipper lines
@@ -80,11 +80,11 @@ m = cp.Model(
     # renban
     renban(cells[2, 1:]),
     # one duplicate in each row and column
-    cp.all(duplicate(cells[i, :], duplicate_rs[i]) for i in range(duplicate_rs.shape[0])),
-    cp.all(duplicate(cells[:,i], duplicate_cs[i]) for i in range(duplicate_cs.shape[0])),
+    [duplicate(cells[i, :], duplicate_rs[i]) for i in range(duplicate_rs.shape[0])],
+    [duplicate(cells[:,i], duplicate_cs[i]) for i in range(duplicate_cs.shape[0])],
     # one removed from each row and column
-    cp.all(missing(cells[i,:], removals_rs[i]) for i in range(removals_rs.shape[0])),
-    cp.all(missing(cells[:,i], removals_cs[i]) for i in range(removals_cs.shape[0])),
+    [missing(cells[i,:], removals_rs[i]) for i in range(removals_rs.shape[0])],
+    [missing(cells[:,i], removals_cs[i]) for i in range(removals_cs.shape[0])],
     # all removals and repeats should be unique for each row and column
     cp.AllDifferent(duplicate_rs),
     cp.AllDifferent(duplicate_cs),
@@ -93,14 +93,37 @@ m = cp.Model(
 
 )
 
-sol = m.solve()
-print("The solution is:")
-print(cells.value())
-print("The duplicates in rows are:")
-print(duplicate_rs.value())
-print("The duplicates in columns are:")
-print(duplicate_cs.value())
-print("The removed digits in rows are:")
-print(removals_rs.value())
-print("The removed digits in columns are:")
-print(removals_cs.value())
+
+m += cells[0,0] == 4
+
+sol = m.solve(time_limit=120)
+
+if sol:
+    print("The solution is:")
+    print(cells.value())
+else:
+    from cpmpy.tools.explain.mus import mus, cp_mus
+    
+    import time
+    
+    print("starting MUS")
+    
+    start = time.time()
+    res = cp_mus(m.constraints, solver="pysat:Cadical195", model_rotation=False, init_check=True, time_limit=120)
+    end = time.time()
+    
+    print(res)
+
+    print(f"took {end-start} seconds")
+
+# sol = m.solve()
+# print("The solution is:")
+# print(cells.value())
+# print("The duplicates in rows are:")
+# print(duplicate_rs.value())
+# print("The duplicates in columns are:")
+# print(duplicate_cs.value())
+# print("The removed digits in rows are:")
+# print(removals_rs.value())
+# print("The removed digits in columns are:")
+# print(removals_cs.value())

@@ -31,21 +31,21 @@ def n_lines(array, total):
 
     # the N-value must be equal to one of the values
     constraints.append(cp.any([total == s for s in sums]))
-    return cp.all(constraints)
+    return constraints
 
 def even_sum(array, total):
     # line must sum to an even total
-    return cp.all([n_lines(array, total), total % 2 == 0])
+    return [n_lines(array, total), total % 2 == 0]
 
 def prime_sum(array, total):
     # all prime sums reachable for two sudoku digits
     primes = [2, 3, 5, 7, 11, 13, 17]
     pairs = [(a,b) for a,b in zip(array, array[1:])]
-    return cp.all([n_lines(array, total), cp.all([cp.any([cp.sum(pair) == p for p in primes]) for pair in pairs])])
+    return [n_lines(array, total), [cp.any([cp.sum(pair) == p for p in primes]) for pair in pairs]]
 
 def renban(array, total):
     # digits on a pink renban form a set of consecutive non repeating digits
-    return cp.all([n_lines(array, total), cp.AllDifferent(array), cp.max(array) - cp.min(array) == len(array) - 1])
+    return [n_lines(array, total), cp.AllDifferent(array), cp.max(array) - cp.min(array) == len(array) - 1]
 
 # there are no kropki dots in this sudoku the two following functions are used for the anti-kropki line
 def white_kropki(a, b):
@@ -62,12 +62,12 @@ def anti_kropki(array, total):
     constraints = []
     for pair in all_pairs:
         constraints.append(cp.all([~white_kropki(pair[0], pair[1]), ~black_kropki(pair[0], pair[1])]))
-    return cp.all([cp.all(constraints), n_lines(array, total)])
+    return [constraints, n_lines(array, total)]
 
 def same_difference(array, total):
     # adjacent cells on the line must all have the same difference
     diff = cp.intvar(0,8, shape=1)
-    return cp.all([cp.all([abs(a-b) == diff for a,b in zip(array, array[1:])]), n_lines(array, total)])
+    return [[abs(a-b) == diff for a,b in zip(array, array[1:])], n_lines(array, total)]
 
 
 def regroup_to_blocks(grid):
@@ -135,6 +135,24 @@ for i in range(cells.shape[0]):
     m += cp.AllDifferent(cells[:,i])
     m += cp.AllDifferent(blocks[i])
 
-sol = m.solve()
-print("The solution is:")
-print(cells.value())
+m += cells[0,0] == 4
+
+sol = m.solve(solver="ortools", time_limit=120)
+
+if sol:
+    print("The solution is:")
+    print(cells.value())
+else:
+    from cpmpy.tools.explain.mus import mus, cp_mus
+    
+    import time
+    
+    print("starting MUS")
+    
+    start = time.time()
+    res = cp_mus(m.constraints, solver="ortools", model_rotation=False, init_check=True, time_limit=120)
+    end = time.time()
+    
+    print(res)
+
+    print(f"took {end-start} seconds")

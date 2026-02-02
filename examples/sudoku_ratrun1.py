@@ -4,9 +4,9 @@ import numpy as np
 # This cpmpy example solves a sudoku by marty_sears, which can be found on https://logic-masters.de/Raetselportal/Raetsel/zeigen.php?id=000IFI
 
 # sudoku cells
-cells = cp.intvar(1,6, shape=(6,6))
+cells = cp.intvar(1,6, shape=(6,6), name="cells")
 # path indices 0 if not on path else the var indicates at what point the rat passes this cell
-path = cp.intvar(0,36, shape=(6,6))
+path = cp.intvar(0,36, shape=(6,6), name="path")
 
 # givens
 # vertical walls
@@ -117,9 +117,29 @@ for i in range(cells.shape[0]):
     m += cp.AllDifferent(cells[:,i])
     m += cp.AllDifferent(blocks[i])
     m += prime_block(blocks[i], path_blocks[i])
+    
+# m += cells[0,0] == 3
+# m += path[1,3] != 3
+m += path[1,5] != 5
 
-sol = m.solve()
-print("The solution is:")
-print(cells.value())
-print("The path is (0 if not on the path):")
-print(path.value())
+sol = m.solve(time_limit=120)
+
+if sol:
+    print("The solution is:")
+    print(cells.value())
+    print("The path is (0 if not on the path):")
+    print(path.value())
+else:
+    from cpmpy.tools.explain.mus import mus, cp_mus
+    
+    import time
+    
+    print("starting MUS")
+    
+    start = time.time()
+    res = cp_mus(m.constraints, solver="ortools", model_rotation=False, time_limit=120)
+    end = time.time()
+    
+    print(res)
+
+    print(f"took {end-start} seconds")

@@ -102,6 +102,7 @@ def wrapper(instance_runner, conn, kwargs, verbose):
         # print(f"finished instance: {kwargs.get('instance_name', 'unknown')}", flush=True)
         instance_runner.run_mus(**kwargs)
         # instance_runner.run_conv(**kwargs)
+        # instance_runner.run_conv_cp(**kwargs)
         conn.send({"status": "ok"})
     except TimeoutError:
         try:
@@ -138,10 +139,10 @@ def execute_instance(args: Tuple[callable, str, dict, callable, str, int, int, i
     instance_runner, filename, metadata, open, solver, time_limit, mem_limit, cores, output_file, verbose, intermediate, checker_path = args
 
     # Fieldnames for the CSV file
-    # fieldnames = list(metadata.keys()) + \
-    #              ['solver',
-    #               'time_total', 'time_parse', 'time_model', 'time_post', 'time_solve',
-    #               'status', 'objective_value', 'solution', 'intermediate', 'checker_result']
+    fieldnames = list(metadata.keys()) + \
+                 ['solver',
+                  'time_total', 'time_parse', 'time_model', 'time_post', 'time_solve',
+                  'status', 'objective_value', 'solution', 'intermediate', 'checker_result']
     # other fieldnames for MUS
     fieldnames = list(metadata.keys()) + ['solver', 'time_total', 'time_parse', 'time_solve', 'mus_size', 'refinement', 'rotation', 'symmetry', 'sat_calls', 'unsat_calls', 'solver_calls', 'total_solve_only', 'solution', 'status']
     # fieldnames= list(metadata.keys()) + ['solver', 'time_total', 'time_parse', 'time_pb_to_cnf', 'time_model', 'time_cnf_to_gcnf', 'time_solve', 'solution', 'status']
@@ -152,7 +153,7 @@ def execute_instance(args: Tuple[callable, str, dict, callable, str, int, int, i
 
     # Decompress before timers start
     # with open(filename) as f:   # <- dataset-specific 'open' callable
-    #     file = f.read() # read to memory-mapped file
+        # file = f.read() # read to memory-mapped file
     
     file = filename
 

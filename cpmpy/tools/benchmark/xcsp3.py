@@ -152,6 +152,24 @@ class XCSP3Benchmark(Benchmark):
         else:
             self.print_comment("Solver did not find any solution within the time/memory limit")
             self.print_status(XCSP3ExitStatus.unknown)
+            
+    def print_mus(self, mus_res, model):
+        from cpmpy.transformations.normalize import toplevel_list
+        cs = toplevel_list(model.constraints)
+        
+        if len(cs) > 100000:
+            result = ''
+            for c in mus_res:
+                index = c.name.replace("mus_sel[", "").replace("]", "")
+                result += f'{index} '
+        else:
+            bitstring = '0'*len(cs)
+            for c in mus_res:
+                index = c.name.replace("mus_sel[", "").replace("]", "")
+                index = int(index)
+                bitstring = bitstring[:index] + '1' + bitstring[index+1:]
+            result = bitstring
+        self.print_value(result)
 
     def handle_memory_error(self, mem_limit):
         super().handle_memory_error(mem_limit)
@@ -209,6 +227,33 @@ class XCSP3Benchmark(Benchmark):
                     result['time_post'] = time_val
                 elif action.startswith('solve'):
                     result['time_solve'] = time_val
+                    # Number of constraints in MUS
+        elif line.startswith('c Number of constraints in MUS:'):
+            result['mus_size'] = int(line.split(':')[-1].strip())
+            
+        # Number of refinement removals
+        elif line.startswith('c Number of refinement removals:'):
+            result['refinement'] = int(line.split(':')[-1].strip())
+
+        # Number of model rotations
+        elif line.startswith('c Number of model rotations:'):
+            result['rotation'] = int(line.split(':')[-1].strip())
+            
+        # Number of constraint found through symmetry exploitation
+        elif line.startswith('c Number of symmetric constraints:'):
+            result['symmetry'] = int(line.split(':')[-1].strip())
+            
+        # Calls with answer SAT
+        elif line.startswith('c Number of calls with answer SAT:'):
+            result['sat_calls'] = int(line.split(':')[-1].strip())
+
+        # Calls with answer UNSAT
+        elif line.startswith('c Number of calls with answer UNSAT:'):
+            result['unsat_calls'] = int(line.split(':')[-1].strip())
+            
+        # Total solve time inside MUS
+        elif line.startswith('c Total solve time inside MUS (s):'):
+            result['total_solve_only'] = float(line.split(':')[-1].strip())
 
 
 if __name__ == "__main__":

@@ -36,6 +36,7 @@ import sys
 import time
 import math
 import random
+from xml.parsers.expat import model
 import psutil
 import warnings
 from enum import Enum
@@ -46,6 +47,9 @@ from collections import defaultdict # Added for efficient mapping
 
 # --- Necessary Imports for Conversion (assumed to be available in the runner's context) ---
 import cpmpy as cp
+from cpmpy.expressions.core import Comparison, Operator
+from cpmpy.expressions.variables import _BoolVarImpl, NegBoolView
+from cpmpy.expressions.variables import _BoolVarImpl
 from cpmpy.tools.explain.mus import make_assump_model
 from cpmpy.solvers.pysat import CPM_pysat
 from pysat.formula import CNF
@@ -53,12 +57,23 @@ from pysat.formula import CNF
 import cpmpy as cp
 from cpmpy.tools.benchmark import _mib_as_bytes, _wall_time, set_memory_limit, set_time_limit, _bytes_as_mb, _bytes_as_gb, disable_memory_limit
 from cpmpy.tools.explain import mus, quickxplain, pb_mus, cp_mus
+from cpmpy.transformations.decompose_global import decompose_in_tree
+from cpmpy.transformations.flatten_model import flatten_constraint
+from cpmpy.transformations.int2bool import int2bool
+from cpmpy.transformations.linearize import linearize_constraint, only_positive_coefficients, only_positive_coefficients
+from cpmpy.transformations.normalize import simplify_boolean, toplevel_list
+from cpmpy.transformations.reification import only_bv_reifies, only_implies
+from cpmpy.transformations.safening import no_partial_functions
+from cpmpy.transformations.to_cnf import to_cnf
+from cpmpy.transformations.to_cnf import to_cnf
 
 # # --- Configuration (Define these paths outside the function, e.g., in self or module globals) ---
-# OUTPUT_CNF_DIR = "/cw/dtailocal/orestis/benchmarks/2024/CNF/" 
-# OUTPUT_GCNF_DIR = "/cw/dtailocal/orestis/benchmarks/2024/GCNF/" 
-# Path(OUTPUT_CNF_DIR).mkdir(parents=True, exist_ok=True)
-# Path(OUTPUT_GCNF_DIR).mkdir(parents=True, exist_ok=True)
+path = "/home/orestis_ubuntu/work/"
+# path = "/cw/dtailocal/orestis/"
+OUTPUT_CNF_DIR = f"{path}benchmarks/2025/XCSP_CNF/" 
+OUTPUT_GCNF_DIR = f"{path}benchmarks/2025/XCSP_GCNF/" 
+Path(OUTPUT_CNF_DIR).mkdir(parents=True, exist_ok=True)
+Path(OUTPUT_GCNF_DIR).mkdir(parents=True, exist_ok=True)
 
 class ExitStatus(Enum):
     unsupported:str = "unsupported" # instance contains an unsupported feature (e.g. a unsupported global constraint)
@@ -76,7 +91,7 @@ class Benchmark(ABC):
     It is designed to be extended or customized for specific benchmarking needs.    
     """
 
-    def __init__(self, reader:callable, exit_status:Enum):
+    def __init__(self, reader:callable, exit_status:Enum=ExitStatus):
         """
         Arguments:
             reader (callable): A parser from a model format to a CPMPy model.
@@ -571,6 +586,7 @@ class Benchmark(ABC):
     def run(
         self,
         instance:str,                           # path to the instance to run
+        instance_name:str,                               # name of the instance to run
         open:Optional[callable] = None,         # how to 'open' the instance file
         seed: Optional[int] = None,             # random seed
         time_limit: Optional[int] = None,       # time limit for this single instance
@@ -617,7 +633,7 @@ class Benchmark(ABC):
             time_parse = time.time()
             model = self.read_instance(instance, open=open)
             
-            model.objective_ = None
+            # model.objective_ = None
             time_parse = time.time() - time_parse
             
             # model, _, assumps = make_assump_model(model.constraints)
@@ -678,6 +694,26 @@ class Benchmark(ABC):
 
             self.print_result(s)
 
+            from cpmpy.solvers.solver_interface import ExitStatus
+            basename = os.path.basename(instance_name)
+            path = "/home/orestis_ubuntu/work/"
+            # path = "/cw/dtailocal/orestis/"
+            
+            if model.has_objective() and s.status().exitstatus == ExitStatus.OPTIMAL:
+                for p in [0.25, 0.5, 0.75, 1]:
+                    alt_model = cp.Model(model.constraints)
+                    if model.objective_is_min:
+                        alt_model += model.objective_ < int(p * model.objective_value())
+                        alt_model.to_file(f"{path}/benchmarks/2025/ALL-XCSP-UNSAT/{basename}_{p}.pkl")
+                    else:
+                        alt_model += model.objective_ > int((2-p) * model.objective_value())
+                        alt_model.to_file(f"{path}/benchmarks/2025/ALL-XCSP-UNSAT/{basename}_{2-p}.pkl")
+                
+                print(f"Saved OPTIMAL instance to {path}/benchmarks/2025/ALL-XCSP-UNSAT/{basename}_*.pkl", flush=True)
+            elif s.status().exitstatus == ExitStatus.UNSATISFIABLE:
+                model.to_file(f"{path}/benchmarks/2025/ALL-XCSP-UNSAT/{basename}.pkl")
+                
+                print(f"Saved UNSAT instance to {path}/benchmarks/2025/ALL-XCSP-UNSAT/{basename}.pkl", flush=True)
             # ------------------------------------- - ------------------------------------ #
 
             
@@ -746,6 +782,9 @@ class Benchmark(ABC):
             
             time_parse = time.time()
             model = self.read_instance(instance, open=open)
+            
+            
+            
             time_parse = time.time() - time_parse
             
             # print(f"model: {model}", flush=True)
@@ -783,7 +822,7 @@ class Benchmark(ABC):
             
             time_solve = time.time()
             try:
-                mus_res, nb_rf, nb_mr, nb_symm, sat, unsat, total_solve_time = cp_mus(model.constraints, solver=solver, time_limit=time_limit, model_rotation=True, redundancy_removal=False, assumption_removal=False, use_symmetries=False, block=False, eager=True, **solver_args)
+                mus_res, nb_rf, nb_mr, nb_symm, sat, unsat, total_solve_time = cp_mus(model.constraints, solver=solver, time_limit=time_limit, model_rotation=False, redundancy_removal=False, assumption_removal=False, use_symmetries=False, block=True, eager=False, **solver_args)
             except RuntimeError as e:
                 if "Program interrupted by user." in str(e): # Special handling for Exact
                     raise TimeoutError("Exact interrupted due to timeout")
@@ -811,6 +850,257 @@ class Benchmark(ABC):
             
         except MemoryError as e:
             disable_memory_limit()
+            self.handle_memory_error(mem_limit)
+            raise e
+        except NotImplementedError as e:
+            self.handle_not_implemented(e)
+            raise e
+        except TimeoutError as e:
+            self.handle_exception(e) # TODO add callback for timeout?
+            raise e
+        except Exception as e:
+            self.handle_exception(e)
+            raise e
+        
+    def run_conv_cp(
+        self,
+        instance:str,
+        #open:Optional[callable] = None,
+        seed: Optional[int] = None,
+        time_limit: Optional[int] = None,
+        mem_limit: Optional[int] = None, # MiB: 1024 * 1024 bytes
+        cores: int = 1,
+        solver: str = None,
+        time_buffer: int = 0,
+        intermediate: bool = False,
+        verbose: bool = False,
+        **kwargs,
+    ):
+        
+        if not verbose:
+            warnings.filterwarnings("ignore")
+            
+        instance_path = Path(kwargs.get('instance_name'))
+        file_name = instance_path.name
+        instance_name = file_name.replace(".opb.xz", "")
+        cnf_output_path = Path(OUTPUT_CNF_DIR) / f"{instance_name}.cnf"
+        gcnf_output_path = Path(OUTPUT_GCNF_DIR) / f"{instance_name}.gcnf"
+            
+        try:
+
+            # --------------------------- Global Configuration --------------------------- #
+
+            # Get the current process
+            p = psutil.Process()
+
+            self.init_signal_handlers()
+
+            # Set memory limit (if provided)
+            if mem_limit is not None:
+                # mem_limit is in MiB, convert to bytes for resource module
+                mem_limit_bytes = mem_limit * 1024 * 1024
+                self.set_memory_limit(mem_limit_bytes) # Assuming self.set_memory_limit handles resource.setrlimit
+
+            # Set time limit (if provided)
+            if time_limit is not None:
+                self.set_time_limit(time_limit) # set remaining process time != wall time
+
+            # ------------------------------ Parse instance ------------------------------ #
+
+            time_parse = time.time()
+            # NOTE: self.read_instance needs to handle the decompression of .opb.xz 
+            # and return the cpmpy Model object.
+            model = self.read_instance(instance, open=open) 
+            time_parse = time.time() - time_parse
+            
+            if verbose: self.print_comment(f"took {time_parse:.4f} seconds to parse model")
+
+            if time_limit and time_limit < _wall_time(p):
+                raise TimeoutError("Time's up after parse")
+            
+            # ------------------------ Post CPMpy model to solver ------------------------ #
+            time_solve = time.time() # Start total conversion timer
+
+            # Setup for conversion: This part prepares the model components needed for CNF generation
+            model, _, assumps = make_assump_model(model.constraints, name="sel")
+            pysat = CPM_pysat(model)
+            constrs = model.constraints[0]
+            
+            time_pb_to_cnf = time.time()
+            cpm_cons = toplevel_list(constrs)
+            cpm_cons = no_partial_functions(cpm_cons, safen_toplevel={"div", "mod", "element"})
+            cpm_cons = decompose_in_tree(cpm_cons, supported=frozenset({"alldifferent"}), csemap=pysat._csemap)
+            cpm_cons = simplify_boolean(cpm_cons)
+            cpm_cons = flatten_constraint(cpm_cons, csemap=pysat._csemap)
+            cpm_cons = only_bv_reifies(cpm_cons, csemap=pysat._csemap)
+            cpm_cons = only_implies(cpm_cons, csemap=pysat._csemap)
+            cpm_cons = linearize_constraint(cpm_cons, supported=frozenset({"sum","wsum", "->", "and", "or"}), csemap=pysat._csemap)
+            cpm_cons = int2bool(cpm_cons, pysat.ivarmap, encoding=pysat.encoding)
+            cpm_cons = only_positive_coefficients(cpm_cons)
+            formula = []
+            # Get the integer literals for the assumption variables used for reification
+            assumps_literals = set(map(pysat.solver_var, assumps)) 
+            # dmap = dict(zip(assumps, pysat.solver_var(assumps)))
+            
+            # ------------------------------- Solve model / Convert ------------------------------- #
+            
+            # Adapt time limit setting for the conversion phase
+            if time_limit:
+                time_limit_remaining = time_limit - _wall_time(p) - time_buffer
+                self.set_time_limit(None) # Disable signal-based time limit for the main block
+                if verbose: self.print_comment(f"{time_limit_remaining}s left for conversion")
+            
+
+            # --- 1. PB to CNF Conversion ---
+            if verbose: self.print_comment(f"Starting PB-to-CNF conversion...")
+
+            
+            for constraint in cpm_cons:
+                if constraint.name == 'or':
+                    formula.append(pysat.solver_vars(constraint.args))
+                elif constraint.name == '->':
+                    a0, a1 = constraint.args
+                    if isinstance(a1, _BoolVarImpl):
+                        formula.append([pysat.solver_var(~a0), pysat.solver_var(a1)])
+                    elif isinstance(a1, Operator) and a1.name == 'or':
+                        formula.append([pysat.solver_var(~a0)] + pysat.solver_vars(a1.args))
+                    elif isinstance(a1, Comparison) and a1.args[0].name == "sum":
+                        cnf = pysat._pysat_cardinality(a1, reified=True)
+                        formula.extend([[pysat.solver_var(~a0)] + c for c in cnf])
+                    elif isinstance(a1, Comparison) and a1.args[0].name == "wsum":
+                        formula.extend(pysat._pysat_pseudoboolean(a1, conditional=a0))
+                elif isinstance(constraint, Comparison):
+                    if constraint.args[0].name == "sum":
+                        formula.extend(pysat._pysat_cardinality(constraint))
+                    elif constraint.args[0].name == "wsum":
+                        formula.extend(pysat._pysat_pseudoboolean(constraint))
+
+            # Save CNF
+            cnf_obj = CNF(from_clauses=formula)
+            cnf_obj.to_file(str(cnf_output_path))
+            
+            # --- NEW PRINT FOR PB-to-CNF TIME ---
+            time_pb_to_cnf = time.time() - time_pb_to_cnf
+            self.print_comment(f"took {time_pb_to_cnf:.4f} seconds to convert PB to CNF")
+            # ------------------------------------
+
+            # --- 2. CNF to GCNF Conversion (Optimized) ---
+            if verbose: self.print_comment(f"Starting CNF-to-GCNF conversion...")
+
+            time_cnf_to_gcnf = time.time()
+
+            assumps_abs = sorted([abs(a) for a in assumps_literals])
+            sel_vars = []
+            
+            # OPTIMIZATION: Build a mapping table instead of using O(N) list search per literal
+            max_var = cnf_obj.nv # Get max variable index from the CNF object
+            
+            # Build the remapping table for non-selection variables
+            var_mapping = {}
+            shift = 0
+            
+            for i in range(1, max_var + 1):
+                if i in assumps_abs:
+                    shift += 1
+                    # Selection variable is removed from the regular variable space
+                else:
+                    # Regular variable: new index is original index - accumulated shift
+                    var_mapping[i] = i - shift
+            
+            # Process clauses and apply mapping
+            soft_lines = []  # Group clauses
+            hard_lines = []  # Non-group clauses
+            real_count = 0
+            vars_set = set()
+            
+            for line_ints in formula: # formula is the in-memory list of clauses
+                
+                real_group = False
+                current_line_sel_var = None
+
+                # Check for selection variable
+                for l in line_ints:
+                    if -l in assumps_literals:
+                        current_line_sel_var = -l
+                        real_group = True
+                        break
+                        
+                new_line = []
+                if real_group:
+                    real_count += 1
+                    if current_line_sel_var not in sel_vars:
+                        sel_vars.append(current_line_sel_var)
+                    
+                    group_index = sel_vars.index(current_line_sel_var) + 1
+                    new_line.append(f"{{{group_index}}}")
+                else:
+                    new_line.append("{0}")
+
+                # Apply optimized mapping to literals
+                for l in line_ints:
+                    if l == 0:
+                        continue
+                    
+                    if -l in assumps_literals:
+                        # Skip the selection literal itself in the clause body
+                        continue
+                    else:
+                        abs_l = abs(l)
+                        new_abs_l = abs_l
+                        
+                        if l not in assumps_literals:
+                        
+                            vars_set.add(new_abs_l)
+                        
+                        if l > 0:
+                            new_line.append(f"{new_abs_l}")
+                        else:
+                            new_line.append(f"-{new_abs_l}")
+
+                new_line.append("0")
+                
+                # Group clauses are written first in GCNF format
+                if real_group:
+                    soft_lines.append(" ".join(new_line))
+                else:
+                    hard_lines.append(" ".join(new_line))
+                    
+            # Construct GCNF file content
+            nb_vars = len(vars_set) + len(assumps_literals)
+            nb_clauses = len(soft_lines) + len(hard_lines)
+            nb_groups = len(sel_vars)
+            header = f"p gcnf {nb_vars} {nb_clauses} {nb_groups}"
+            dimacs_gcnf = "\n".join([header] + soft_lines + hard_lines) + "\n"
+            
+            with open(gcnf_output_path, "w") as f:
+                f.write(dimacs_gcnf)
+
+            # ------------------- End of Conversion Logic -------------------
+            
+            # --- NEW PRINT FOR CNF-to-GCNF TIME ---
+            time_cnf_to_gcnf = time.time() - time_cnf_to_gcnf
+            self.print_comment(f"took {time_cnf_to_gcnf:.4f} seconds to convert CNF to GCNF")
+            # ------------------------------------
+
+            time_solve = time.time() - time_solve # Total conversion time
+            self.print_comment(f"took {time_solve:.4f} seconds to convert")
+            
+            # ... (return value structure would go here, e.g., a dictionary of results) ...
+            return {
+                'status': 'CONVERTED',
+                'time_total': time_parse + time_solve,
+                'time_convert': time_solve,
+                'cnf_path': str(cnf_output_path),
+                'gcnf_path': str(gcnf_output_path),
+                'nb_vars_gcnf': nb_vars,
+                'nb_clauses_gcnf': nb_clauses
+            }
+            # ------------------------------------- - ------------------------------------ #
+
+        except MemoryError as e:
+            # NOTE: disable_memory_limit() should be called from the parent process 
+            # or globally managed if using signals, but for this context:
+            # disable_memory_limit() # Placeholder
             self.handle_memory_error(mem_limit)
             raise e
         except NotImplementedError as e:
@@ -882,12 +1172,14 @@ class Benchmark(ABC):
             # ------------------------ Post CPMpy model to solver ------------------------ #
 
             # Setup for conversion: This part prepares the model components needed for CNF generation
-            model, _, assumps = make_assump_model(model.constraints)
-            pysat = CPM_pysat(model)
-            constrs = model.constraints[0]
-            formula = []
-            # Get the integer literals for the assumption variables used for reification
-            assumps_literals = list(map(pysat.solver_var, assumps)) 
+            assump_model, _, assumps = make_assump_model(model.constraints, name="sel")
+            # print(model)
+            
+            start_cp_to_cnf = time.time()
+            
+            pysat = CPM_pysat(assump_model)
+            
+            clauses = to_cnf(assump_model.constraints)
             
             # ------------------------------- Solve model / Convert ------------------------------- #
             
@@ -904,22 +1196,6 @@ class Benchmark(ABC):
 
             time_pb_to_cnf = time.time()
             
-            for constraint in constrs:
-                sel_var = constraint.args[0]
-                pb_constr = constraint.args[1]
-                if pb_constr.args[0].name == "sum":
-                    cnf = pysat._pysat_cardinality(pb_constr, reified=True)
-                    antecedent = [pysat.solver_var(~sel_var)]
-                    clauses = [antecedent+c for c in cnf]
-                    formula.extend(clauses)
-                elif pb_constr.args[0].name == "wsum":
-                    # Conditional conversion: PB constraint is true if sel_var is true
-                    clauses = pysat._pysat_pseudoboolean(pb_constr, conditional=sel_var)
-                    formula.extend(clauses)
-            
-            cnf = CNF(from_clauses=formula)
-            cnf.to_file(str(cnf_output_path))
-            
             # --- NEW PRINT FOR PB-to-CNF TIME ---
             time_pb_to_cnf = time.time() - time_pb_to_cnf
             self.print_comment(f"took {time_pb_to_cnf:.4f} seconds to convert PB to CNF")
@@ -930,82 +1206,76 @@ class Benchmark(ABC):
 
             time_cnf_to_gcnf = time.time()
 
-            assumps_abs = sorted([abs(a) for a in assumps_literals])
-            sel_vars = []
-            
-            # OPTIMIZATION: Build a mapping table instead of using O(N) list search per literal
-            max_var = cnf.nv # Get max variable index from the CNF object
-            
-            # Build the remapping table for non-selection variables
-            var_mapping = {}
-            shift = 0
-            
-            for i in range(1, max_var + 1):
-                if i in assumps_abs:
-                    shift += 1
-                    # Selection variable is removed from the regular variable space
-                else:
-                    # Regular variable: new index is original index - accumulated shift
-                    var_mapping[i] = i - shift
-            
-            # Process clauses and apply mapping
+            max_var = 1
+            max_group = 1
+            soft_lines = []
+            hard_lines = []
             new_lines = []
-            real_count = 0
-            vars_set = set()
             
-            for line_ints in formula: # formula is the in-memory list of clauses
+            for line in clauses: # formula is the in-memory list of clauses
+                new_line = []
                 
                 real_group = False
-                current_line_sel_var = None
 
                 # Check for selection variable
-                for l in line_ints:
-                    if -l in assumps_literals:
-                        current_line_sel_var = -l
+                if isinstance(line, NegBoolView) or isinstance(line, _BoolVarImpl):
+                    if "~sel" in line.name:
+                        # This is a soft clause
+                        group = int(line.name.replace("~sel[", "").replace("]", "")) + 1
+                        max_group = max(group, max_group)
+                        
                         real_group = True
-                        break
+                        new_line.append(f"{{{group}}} 0")
                         
-                new_line = []
-                if real_group:
-                    real_count += 1
-                    if current_line_sel_var not in sel_vars:
-                        sel_vars.append(current_line_sel_var)
-                    
-                    group_index = sel_vars.index(current_line_sel_var) + 1
-                    new_line.append(f"{{{group_index}}}")
-                else:
-                    new_line.append("{0}")
-
-                # Apply optimized mapping to literals
-                for l in line_ints:
-                    if -l in assumps_literals:
-                        # Skip the selection literal itself in the clause body
-                        continue
+                        soft_lines.append(" ".join(new_line))
                     else:
-                        abs_l = abs(l)
-                        new_abs_l = var_mapping[abs_l] # O(1) lookup
-                        
-                        vars_set.add(new_abs_l)
-                        
-                        if l > 0:
-                            new_line.append(f"{new_abs_l}")
-                        else:
-                            new_line.append(f"-{new_abs_l}")
-
-                new_line.append("0")
-                
-                # Group clauses are written first in GCNF format
-                if real_group:
-                    new_lines.insert(real_count - 1, " ".join(new_line))
+                        # This is a hard clause
+                        new_line.append("{0}")
+                        new_line.append(pysat.solver_var(line))
+                        new_line.append("0")
+                        # new_lines.insert(real_count + 1, " ".join(new_line))
                 else:
-                    new_lines.append(" ".join(new_line))
+                    for l in line.args:
+                        if "~sel" in l.name:
+                            group = int(l.name.replace("~sel[", "").replace("]", "")) + 1
+                            max_group = max(group, max_group)
+                            
+                            real_group = True
+                            break
+                            
+                    if real_group:
+                        # group_index = sel_vars.index(current_line_sel_var) + 1
+                        new_line.append(f"{{{group}}}")
+                    else:
+                        new_line.append("{0}")
+
+                    for i, l in enumerate(line.args):
+                        
+                        if "~sel" in l.name:
+                            assert isinstance(l, NegBoolView), "Selector variable is not negated."
+                            continue
+                        else:
+                            new_line.append(str(pysat.solver_var(l)))
+                            max_var = max(abs(pysat.solver_var(l)), max_var)
+                    # print(sel_vars)
+
+                    new_line.append("0")
+                    
+                    if real_group:
+                        soft_lines.append(" ".join(new_line))
+                        # new_lines.insert(real_count + 1, " ".join(new_line))
+                    else:
+                        hard_lines.append(" ".join(new_line))
+                        # new_lines.append(" ".join(new_line))
                     
             # Construct GCNF file content
-            nb_vars = len(vars_set)
-            nb_clauses = len(new_lines)
-            nb_groups = len(sel_vars)
+            nb_vars = max_var
+            # nb_vars = 2
+            nb_clauses = len(soft_lines) + len(hard_lines)
+            nb_groups = max_group
             header = f"p gcnf {nb_vars} {nb_clauses} {nb_groups}"
-            dimacs_gcnf = "\n".join([header] + new_lines) + "\n"
+            new_lines = [header] + soft_lines + hard_lines
+            dimacs_gcnf = "\n".join(new_lines) + "\n"
             
             with open(gcnf_output_path, "w") as f:
                 f.write(dimacs_gcnf)

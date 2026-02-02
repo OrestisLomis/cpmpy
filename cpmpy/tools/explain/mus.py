@@ -14,7 +14,7 @@ from cpmpy.transformations.decompose_global import decompose_in_tree
 from cpmpy.transformations.flatten_model import flatten_constraint
 from cpmpy.transformations.get_variables import get_variables, get_variables_model 
 from cpmpy.transformations.int2bool import int2bool
-from cpmpy.transformations.linearize import canonical_comparison, linearize_constraint, only_ge_comparison, only_positive_coefficients, sorted_coefficients
+from cpmpy.transformations.linearize import canonical_comparison, linearize_constraint
 from cpmpy.transformations.normalize import simplify_boolean, toplevel_list
 from cpmpy.solvers.solver_interface import ExitStatus
 import time
@@ -31,7 +31,7 @@ from .utils import make_assump_model, replace_cons_with_assump, OCUSException
 from .utils import get_length_gen, make_assump_model, get_slack, get_degree_over_sum, get_max_sat, get_min_sat, get_length, rotate_model, rotate_model_cp, rotate_model_old, rotate_model_group
 
 # @profile
-def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check=True, assumption_removal=False, redundancy_removal=False, sorting="length", reversed_order=True, model_rotation=False, maximize_cons=False, recursive=True, assertions=False, use_symmetries=False, block=True, depth=None, eager=False, cascade=True, time_limit=1800, **kwargs):
+def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=False, init_check=False, assumption_removal=False, redundancy_removal=False, sorting="length", reversed_order=True, model_rotation=False, maximize_cons=False, recursive=True, assertions=False, use_symmetries=False, block=True, depth=None, eager=False, cascade=True, time_limit=1800, **kwargs):
     """
         A PB-level deletion-based MUS algorithm using assumption variables
         and unsat core extraction
@@ -238,7 +238,7 @@ def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
 
     return found, nb_removed_refinement, nb_found_mr, nb_found_symm, sat_calls, unsat_calls, total_solve_time
 
-def cp_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check=True, assumption_removal=False, redundancy_removal=False, sorting=None, reversed_order=True, model_rotation=False, maximize_cons=False, recursive=True, assertions=False, use_symmetries=False, block=True, depth=None, eager=False, time_limit=1800, **kwargs):
+def cp_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check=False, assumption_removal=False, redundancy_removal=False, sorting=None, reversed_order=True, model_rotation=False, maximize_cons=False, recursive=True, assertions=False, use_symmetries=False, block=True, depth=None, eager=False, time_limit=1800, **kwargs):
     """
         A PB-level deletion-based MUS algorithm using assumption variables
         and unsat core extraction.
@@ -271,6 +271,10 @@ def cp_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
 
     # make assumption (indicator) variables and soft-constrained model
     (m, soft, assump) = make_assump_model(soft, hard=hard, name="mus_sel")
+    
+    # print(f"assumption model: {m}")
+    
+    print(f"there are {len(assump)} soft constraints")
     
     if use_symmetries:
         breakid = BreakID(BREAKID_PATH)  # use pb branch
@@ -330,7 +334,7 @@ def cp_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
 
     if init_check:
         # setting all assump vars to true should be UNSAT
-        # print("Performing initial UNSAT check...")
+        print("Performing initial UNSAT check...")
     
         if solver == "pysat:Cadical195":
             warnings.warn("Can not add time_limit to pysat:Cadical195 solver calls, ignoring time_limit argument")
@@ -340,6 +344,8 @@ def cp_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
             
         if time_limit is not None:
             elapsed = time.time() - start
+            
+            print(f"Initial solve time: {elapsed} sec")
             if elapsed >= time_limit:
                 raise TimeoutError("Time's up during initial solve")
             total_solve_time += elapsed
@@ -404,7 +410,7 @@ def cp_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
                 raise TimeoutError(f"MUS algorithm reached timeout during solve")
         
         last_call_time = time.time() - start_solve
-        # print(f"last_call_time: {last_call_time}")
+        print(f"last_call_time: {last_call_time}")
         total_solve_time += last_call_time
         if s.status().exitstatus == ExitStatus.FEASIBLE:
             total_sat_solve_time += last_call_time
@@ -425,9 +431,9 @@ def cp_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
             if model_rotation:
 
                 found_size = len(found_cons)
-                # print("+MR")
+                print("+MR")
                 new_rots = rotate_model_cp([dmap[c] for c in core] + hard, dmap[c], found_cons, recursive=recursive, depth=depth, block=block, seen=seen, c_index=c_index, v_index=v_index, eager=eager, hard=hard)
-                # print("-MR")
+                print("-MR")
                 found_cons.update(new_rots)
                 # print(f"Model rotation found {len(found) - found_size} new transition constraints")
                 new_foundlen = len(found_cons) - found_size
@@ -458,6 +464,7 @@ def cp_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
                 # print("-SYMM")
                 # print(f"  - found {len(found) - found_size} new constraints via symmetries")
                 nb_found_symm += len(found) - found_size
+            print(f"constraints in MUS so far: {len(found)}")
         elif s.status().exitstatus == ExitStatus.UNSATISFIABLE: # UNSAT, use new solver core (clause set refinement)
             unsat_calls += 1
             if clause_set_refinement:
@@ -465,9 +472,11 @@ def cp_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
                 if redundancy_removal:
                     # s += ~red_var # remove red constraint
                     if red_var in new_core:
+                        print(f"core size: {len(core)}")
                         continue
                 nb_removed_refinement += len(core) - len(new_core)
                 core = new_core
+            print(f"core size: {len(core)}")
         # print(f"Model: {m}")
         else:
             raise TimeoutError(f"MUS algorithm reached timeout during solve")

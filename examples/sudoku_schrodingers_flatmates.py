@@ -1,6 +1,8 @@
 import cpmpy as cp
 import numpy as np
 
+from cpmpy.tools.explain.mus import cp_mus
+
 # This cpmpy example solves a sudoku by gdc, which can be found on https://logic-masters.de/Raetselportal/Raetsel/zeigen.php?id=000KBK
 
 # sudoku cells
@@ -87,10 +89,15 @@ for i in range(cells.shape[0]):
     m += cp.sum(schrodinger[:,i]) != -6
     m += cp.sum(schrodinger_blocks[i]) != -6
 
-sol = m.solve()
+sol = m.solve(solver="exact")
 print("The solution is:")
 print(cells.value())
 print("With these schrödinger cells (-1 if not schrödinger):")
 print(schrodinger.value())
 print("Resulting in these true values:")
 print(values.value())
+
+m += values[1,3] != 9
+
+res = cp_mus(m.constraints, solver="exact", model_rotation=True, time_limit=120)
+print(res)
