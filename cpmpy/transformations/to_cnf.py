@@ -78,7 +78,7 @@ def to_gcnf(soft, hard=[], name=None, csemap=None, ivarmap=None, encoding="auto"
     start = time.time()
     cnf = to_cnf(model.constraints, encoding=encoding, csemap=csemap, ivarmap=ivarmap)
     end = time.time()
-    print(f"to_gcnf: converted to CNF in {end - start:.4f} seconds")
+    print(f"c to_gcnf: converted to CNF in {end - start:.4f} seconds")
 
     constraints = {
         True: [],  # hard clauses
@@ -129,10 +129,10 @@ def to_gcnf(soft, hard=[], name=None, csemap=None, ivarmap=None, encoding="auto"
     cl_db = set()
     
     start = time.time()
-    for c in tqdm(cnf):
+    for c in cnf:
         add_gcnf_clause(c, cl_db)
     end = time.time()
-    print(f"to_gcnf: grouped clauses in {end - start:.4f} seconds")
+    print(f"c to_gcnf: grouped clauses in {end - start:.4f} seconds")
 
     # if normalize:
     #     # to make groups disjoint..
@@ -148,11 +148,16 @@ def to_gcnf(soft, hard=[], name=None, csemap=None, ivarmap=None, encoding="auto"
     #                     # then add `f -> c_b` as a hard clause
     #                     # add_gcnf_clause(f.implies(c_b))
     #                     add_gcnf_clause([~f].extend(c_b), cl_db)
+    
+    model = cp.Model(cnf)
+    softs = [cp.all(cp.any(c) for c in constraints[a]) for a in assump]
+    hards = [cp.all(cp.any(c) for c in constraints[True])] if constraints[True] else []
+    
 
     return (
-        cp.Model(cnf),
-        [cp.all(cp.any(c) for c in constraints[a]) for a in assump],
-        [cp.all(cp.any(c) for c in constraints[True])] if constraints[True] else [],
+        model,
+        softs, 
+        hards,
         assump,
     )
 
@@ -172,5 +177,7 @@ def _to_clauses(cons):
             raise NotImplementedError(f"Unsupported Op {cons.name}")
     elif cons is True:
         return []
+    elif cons is False:
+        return [[]]
     else:
         raise NotImplementedError(f"Unsupported constraint {cons}")

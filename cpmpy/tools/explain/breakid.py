@@ -8,7 +8,7 @@ import numpy as np
 import cpmpy as cp
 
 from cpmpy.transformations.flatten_model import flatten_constraint
-from cpmpy.transformations.to_cnf import to_cnf
+# from cpmpy.transformations.to_cnf import to_cnf
 from cpmpy.transformations.get_variables import get_variables
 from cpmpy.transformations.normalize import simplify_boolean, toplevel_list
 from cpmpy.transformations.decompose_global import decompose_in_tree
