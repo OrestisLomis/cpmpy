@@ -4,15 +4,16 @@ import tempfile
 
 import pytest
 import cpmpy as cp
-from cpmpy.tools.dimacs import read_dimacs, write_dimacs
+from cpmpy.tools.dimacs import read_dimacs, write_dimacs, write_gcnf
 from cpmpy.transformations.get_variables import get_variables_model
 from cpmpy.solvers.solver_interface import ExitStatus
 from cpmpy.solvers.pindakaas import CPM_pindakaas
+from test_tocnf import get_gcnf_cases
 
 
 
-@pytest.mark.skipif(not CPM_pindakaas.supported(), reason="Pindakaas (required for `to_cnf`) not installed")
-class CNFTool(unittest.TestCase):
+# @pytest.mark.skipif(not CPM_pindakaas.supported(), reason="Pindakaas (required for `to_cnf`) not installed")
+class CnfTool(unittest.TestCase):
 
     def setUp(self) -> None:
         self.tmpfile = tempfile.NamedTemporaryFile(mode='w', delete=False)
@@ -105,5 +106,84 @@ class CNFTool(unittest.TestCase):
     def test_too_few_variables(self):
         with self.assertRaises(AssertionError):
             self.dimacs_to_model("p cnf 2 1\n1 0")
+    
+class TestDimacs:
+    def test_gcnf(self):
+        x = cp.boolvar(shape=3, name="x")
+        def x_(i):
+            return x[i-1]
 
+        # example from https://satisfiability.org/competition/2011/rules.pdf
+        # c
+        # c Example of group oriented CNF
+        # c
+        # c Represents the following formula
+        # c D
+        # = {x1 or x2 or x3}
+        # c G1 = {x1 -> x2, x2 -> x3}
+        # c G2 = {x3}
+        # c G3 = {x3 -> x2, -x2 or -x3}
+        # c G4 = {x2 -> x3}
+        # c
+        hard = [cp.any(x)]
+        soft = [
+            x_(1).implies(x_(2)) & x_(2).implies(x_(3)),
+            x_(3),
+            x_(3).implies(x_(2)) & (~x_(2)) | (~x_(3)),
+            x_(2).implies(x_(3)),
+        ]
+
+        # TODO current encoding is different from the example
+        #         assert write_gcnf(soft, hard=hard, encoding="direct") == """p gcnf 5 7 4
+        # {0} 1 2 3 0
+        # {1} -1 2 0
+        # {1} -2 3 0
+        # {2} -3 0
+        # {3} 2 -3 0
+        # {3} -2 -3 0
+        # {4} -2 3 0
+        # """
+
+        assert write_gcnf(soft, hard=hard, name="a", encoding="direct") == """p gcnf 5 12 4
+{0} 1 2 3 0
+{0} -4 5 0
+{0} -2 -4 0
+{0} 4 -5 2 0
+{0} -5 -3 2 0
+{0} 3 5 0
+{0} -2 5 0
+{1} -1 2 0
+{1} -2 3 0
+{2} 3 0
+{3} 4 -3 0
+{4} -2 3 0
+"""
+
+        # note: 2nd clause of group 4 is merged with 2nd clause of group 1
+        assert write_gcnf(soft, hard=hard, name="a", encoding="direct", normalize=True) == """p gcnf 6 13 4
+{0} 1 2 3 0
+{0} -4 5 0
+{0} -2 -4 0
+{0} 4 -5 2 0
+{0} -5 -3 2 0
+{0} 3 5 0
+{0} -2 5 0
+{0} -6 -2 3 0
+{1} -1 2 0
+{1} -2 3 0
+{2} 3 0
+{3} 4 -3 0
+{4} 6 0
+"""
+
+
+    @pytest.mark.parametrize(
+        "case",
+        get_gcnf_cases(),
+    )
+    def test_normalized_gcnf(self, case):
+        print("case", case)
+        soft, hard = case
+        fname = tempfile.mktemp()
+        write_gcnf(soft, hard=hard, name="a", encoding="direct", normalize=True, fname=fname)
 

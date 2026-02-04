@@ -3,8 +3,11 @@ Transform constraints to **Conjunctive Normal Form** (i.e. an `and` of `or`s of 
 """
 
 import cpmpy as cp
+from ..expressions.variables import _BoolVarImpl
+from ..expressions.core import Operator
 from ..solvers.pindakaas import CPM_pindakaas
-from ..transformations.get_variables import get_variables
+from cpmpy.tools.explain.marco import make_assump_model
+from cpmpy.expressions.utils import all_pairs
 
 
 def to_cnf(constraints, csemap=None, ivarmap=None, encoding="auto"):
@@ -20,7 +23,9 @@ def to_cnf(constraints, csemap=None, ivarmap=None, encoding="auto"):
         Equivalent CPMpy constraints in CNF, and the updated `ivarmap`
     """
     if not CPM_pindakaas.supported():
-        raise ImportError(f"Install the Pindakaas python library `pindakaas` (e.g. `pip install pindakaas`) package to use the `to_cnf` transformation")
+        raise ImportError(
+            f"Install the Pindakaas python library `pindakaas` (e.g. `pip install pindakaas`) package to use the `to_cnf` transformation"
+        )
 
     import pindakaas as pdk
 
@@ -58,3 +63,86 @@ def to_cnf(constraints, csemap=None, ivarmap=None, encoding="auto"):
     clauses += ((x | ~x) for x in free_vars)  # add free variables so they are "known" by the CNF
 
     return clauses
+
+
+def to_gcnf(soft, hard=None, name=None, csemap=None, ivarmap=None, encoding="auto", normalize=False):
+    """
+    Or `make_assump_cnf`; returns an assumption CNF model, and separately the soft clauses, hard clauses, and assumption variables. Follows https://satisfiability.org/competition/2011/rules.pdf, however, there is no guarantee that the groups are disjoint.
+    """
+
+    model, soft_, assump = make_assump_model(soft, hard=hard, name=name)
+    cnf = to_cnf(model.constraints, encoding=encoding, csemap=csemap, ivarmap=ivarmap)
+
+    constraints = {
+        True: [],  # hard clauses
+        **{a: [] for a in assump},  # assumption mapped to its soft clauses
+    }
+
+    def add_gcnf_clause_(lits):
+        # find the assumption variable (not guaranteed to be first)
+        i = next((i for i, l in enumerate(lits) if (~l) in assump), None)
+        if i:
+            constraints[~lits[i]].append(cp.any(l for i_, l in enumerate(lits) if i_ != i))
+        else:
+            # hard clause (w/o assumption var)
+            constraints[True].append(cp.any(lits))
+
+    def add_gcnf_clause(cpm_expr):
+        for clause in _to_clauses(cpm_expr):
+            i = next((i for i, l in enumerate(clause) if (~l) in assump), None)
+            if i is None:
+                # hard clause (w/o assumption var)
+                constraints[True].append(cp.any(clause))
+            else:
+                # soft clause
+                constraints[~clause[i]].append(cp.any(l for i_, l in enumerate(clause) if i_ != i))
+
+    for c in cnf:
+        add_gcnf_clause(c)
+
+    if normalize:
+        # to make groups disjoint..
+        for (a, g_a), (b, g_b) in all_pairs(constraints.items()):
+            for i, c_a in enumerate(g_a):
+                for j, c_b in enumerate(g_b):
+                    # TODO efficiency, plus account for shuffled literals
+                    # ..we find shared clauses between any two groups..
+                    if c_a == c_b:
+                        # ..in the second group, we replace the clause `c_b` for unit clause `f`
+                        f = cp.boolvar()
+                        g_b[j] = f
+                        # then add `f -> c_b` as a hard clause
+                        add_gcnf_clause(f.implies(c_b))
+
+        for g_a, g_b in all_pairs(constraints.values()):
+            for c_a in g_a:
+                for c_b in g_b:
+                    assert not (c_a == c_b), "Still not disjoint"
+
+
+
+    return (
+        cp.Model(cnf),
+        [cp.all(constraints[a]) for a in assump],
+        [cp.all(constraints[True])] if constraints[True] else [],
+        assump,
+    )
+
+
+def _to_clauses(cons):
+    """Takes some CPMpy constraints in CNF + half-reifications and returns clauses as list of lists"""
+    if isinstance(cons, _BoolVarImpl):
+        return [[cons]]
+    elif isinstance(cons, Operator):
+        if cons.name == "or":
+            return [cons.args]
+        elif cons.name == "and":
+            return [c_ for c in cons.args for c_ in _to_clauses(c)]
+        elif cons.name == "->":
+            return [[~cons.args[0], *c] for c in _to_clauses(cons.args[1])]
+        else:
+            raise NotImplementedError(f"Unsupported Op {cons.name}")
+    elif cons is True:
+        return []
+    else:
+        raise NotImplementedError(f"Unsupported constraint {cons}")
