@@ -99,27 +99,32 @@ def to_gcnf(soft, hard=[], name=None, csemap=None, ivarmap=None, encoding="auto"
                         f = cp.boolvar()
                         clause = [f]
                         # then add `f -> c_b` as a hard clause
-                        constraints[True].append(cp.any([~f] + clause))
+                        constraints[True].append([~f] + clause)
                         # hard clause (w/o assumption var)
                     else:
                     # if normalize:
                         cl_db.add(cl_set)
-                constraints[True].append(cp.any(clause))
+                constraints[True].append(clause)
             else:
                 # soft clause
+                assump = clause.pop(i)  # Remove the element at i
                 if normalize:
-                    cl_set = frozenset(clause[:i] + clause[i+1:])
+                    # clause is a list
+                    cl_set = frozenset(clause)    # Create the set from the remaining elements
                     if cl_set in cl_db:
                         # make new variable for duplicate clause
                         f = cp.boolvar()
                         # then add `f -> c_b` as a hard clause
-                        constraints[True].append(cp.any([~f] + list(cl_set)))
+                        constraints[True].append([~f] + clause)
                         # hard clause (w/o assumption var)
-                        constraints[~clause[i]].append(cp.any([f]))
+                        constraints[~assump].append([f])
                     else:
                     # if normalize:
-                        cl_db.add(frozenset(cl_set))
-                        constraints[~clause[i]].append(cp.any(l for i_, l in enumerate(clause) if i_ != i))
+                        cl_db.add(cl_set)
+                        constraints[~assump].append(clause)
+                else:
+                    constraints[~assump].append(clause)
+                    
 
     cl_db = set()
     
@@ -146,8 +151,8 @@ def to_gcnf(soft, hard=[], name=None, csemap=None, ivarmap=None, encoding="auto"
 
     return (
         cp.Model(cnf),
-        [cp.all(constraints[a]) for a in assump],
-        [cp.all(constraints[True])] if constraints[True] else [],
+        [cp.all(cp.any(c) for c in constraints[a]) for a in assump],
+        [cp.all(cp.any(c) for c in constraints[True])] if constraints[True] else [],
         assump,
     )
 
