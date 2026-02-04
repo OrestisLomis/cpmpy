@@ -2,6 +2,9 @@
 Transform constraints to **Conjunctive Normal Form** (i.e. an `and` of `or`s of literals, i.e. Boolean variables or their negation, e.g. from `x xor y` to `(x or ~y) and (~x or y)`) using a back-end encoding library and its transformation pipeline.
 """
 
+import time
+
+from tqdm import tqdm
 import cpmpy as cp
 from ..expressions.variables import _BoolVarImpl
 from ..expressions.core import Operator
@@ -71,17 +74,23 @@ def to_gcnf(soft, hard=[], name=None, csemap=None, ivarmap=None, encoding="auto"
     """
 
     model, soft_, assump = make_assump_model(soft, hard=hard, name=name)
+    
+    start = time.time()
     cnf = to_cnf(model.constraints, encoding=encoding, csemap=csemap, ivarmap=ivarmap)
+    end = time.time()
+    print(f"to_gcnf: converted to CNF in {end - start:.4f} seconds")
 
     constraints = {
         True: [],  # hard clauses
         **{a: [] for a in assump},  # assumption mapped to its soft clauses
     }
+    
+    neg_assump_set = { (~a) for a in assump }
 
     def add_gcnf_clause(cpm_expr, cl_db=set()):
         for clause in _to_clauses(cpm_expr):
             # assumption var is often the first literal, but this is not guaranteed
-            i = next((i for i, l in enumerate(clause) if (~l) in assump), None)
+            i = next((i for i, l in enumerate(clause) if l in neg_assump_set), None)
             if i is None:
                 if normalize:
                     cl_set = frozenset(clause)
@@ -103,7 +112,6 @@ def to_gcnf(soft, hard=[], name=None, csemap=None, ivarmap=None, encoding="auto"
                     if cl_set in cl_db:
                         # make new variable for duplicate clause
                         f = cp.boolvar()
-                        new_clause = [f]
                         # then add `f -> c_b` as a hard clause
                         constraints[True].append(cp.any([~f] + list(cl_set)))
                         # hard clause (w/o assumption var)
@@ -115,8 +123,11 @@ def to_gcnf(soft, hard=[], name=None, csemap=None, ivarmap=None, encoding="auto"
 
     cl_db = set()
     
-    for c in cnf:
+    start = time.time()
+    for c in tqdm(cnf):
         add_gcnf_clause(c, cl_db)
+    end = time.time()
+    print(f"to_gcnf: grouped clauses in {end - start:.4f} seconds")
 
     # if normalize:
     #     # to make groups disjoint..

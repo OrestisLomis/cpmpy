@@ -50,6 +50,7 @@ import cpmpy as cp
 from cpmpy.expressions.core import Comparison, Operator
 from cpmpy.expressions.variables import _BoolVarImpl, NegBoolView
 from cpmpy.expressions.variables import _BoolVarImpl
+from cpmpy.tools.dimacs_ import write_gcnf
 from cpmpy.tools.explain.mus import make_assump_model
 from cpmpy.solvers.pysat import CPM_pysat
 from pysat.formula import CNF
@@ -69,7 +70,7 @@ from cpmpy.transformations.to_cnf import to_cnf
 
 # # --- Configuration (Define these paths outside the function, e.g., in self or module globals) ---
 path = "/home/orestis_ubuntu/work/"
-# path = "/cw/dtailocal/orestis/"
+path = "/cw/dtailocal/orestis/"
 OUTPUT_CNF_DIR = f"{path}benchmarks/2025/XCSP_CNF/" 
 OUTPUT_GCNF_DIR = f"{path}benchmarks/2025/XCSP_GCNF/" 
 Path(OUTPUT_CNF_DIR).mkdir(parents=True, exist_ok=True)
@@ -1167,7 +1168,6 @@ class Benchmark(ABC):
             # ------------------------ Post CPMpy model to solver ------------------------ #
 
             # Setup for conversion: This part prepares the model components needed for CNF generation
-            assump_model, _, assumps = make_assump_model(model.constraints, name="sel")
             time_parse = time.time() - time_parse
             # print(model)
             
@@ -1180,10 +1180,13 @@ class Benchmark(ABC):
             
             
             
-            clauses = to_cnf(assump_model.constraints)
+            gcnf = write_gcnf(model.constraints, fname=gcnf_output_path, normalize=True)
             
-            cnf_model = cp.Model(clauses)
-            pysat = cp.SolverLookup.get("pysat:Cadical195", cnf_model)
+            # first line looks like p gcnf <num_vars> <num_clauses> <num_groups>
+            first_line = gcnf.splitlines()[0]
+            _, _, nb_vars_str, nb_clauses_str, _ = first_line.split()
+            nb_vars = int(nb_vars_str)
+            nb_clauses = int(nb_clauses_str)
             
             # assert not pysat.solve(assumptions=list(assumps)), "The CNF model is SAT"
             
@@ -1194,109 +1197,16 @@ class Benchmark(ABC):
                 time_limit_remaining = time_limit - _wall_time(p) - time_buffer
                 self.set_time_limit(None) # Disable signal-based time limit for the main block
                 if verbose: self.print_comment(f"{time_limit_remaining}s left for conversion")
-            
-
-            # --- 1. PB to CNF Conversion ---
-            if verbose: self.print_comment(f"Starting PB-to-CNF conversion...")
 
             
             # --- NEW PRINT FOR PB-to-CNF TIME ---
             time_cp_to_cnf = time.time() - start_cp_to_cnf
-            self.print_comment(f"took {time_cp_to_cnf:.4f} seconds to convert PB to CNF")
-            # ------------------------------------
-
-            # --- 2. CNF to GCNF Conversion (Optimized) ---
-            if verbose: self.print_comment(f"Starting CNF-to-GCNF conversion...")
-
-            time_cnf_to_gcnf = time.time()
-
-            max_var = 1
-            max_group = 1
-            soft_lines = []
-            hard_lines = []
-            new_lines = []
-            
-            for line in clauses: # formula is the in-memory list of clauses
-                new_line = []
-                
-                real_group = False
-
-                # Check for selection variable
-                if isinstance(line, NegBoolView) or isinstance(line, _BoolVarImpl):
-                    if "~sel" in line.name:
-                        # This is a soft clause
-                        group = int(line.name.replace("~sel[", "").replace("]", "")) + 1
-                        max_group = max(group, max_group)
-                        
-                        real_group = True
-                        new_line.append(f"{{{group}}} 0")
-                        
-                        soft_lines.append(" ".join(new_line))
-                    else:
-                        # This is a hard clause
-                        new_line.append("{0}")
-                        new_line.append(pysat.solver_var(line))
-                        new_line.append("0")
-                        # new_lines.insert(real_count + 1, " ".join(new_line))
-                else:
-                    for l in line.args:
-                        if "~sel" in l.name:
-                            group = int(l.name.replace("~sel[", "").replace("]", "")) + 1
-                            max_group = max(group, max_group)
-                            
-                            real_group = True
-                            break
-                            
-                    if real_group:
-                        # group_index = sel_vars.index(current_line_sel_var) + 1
-                        new_line.append(f"{{{group}}}")
-                    else:
-                        new_line.append("{0}")
-
-                    for i, l in enumerate(line.args):
-                        
-                        if "~sel" in l.name:
-                            assert isinstance(l, NegBoolView), "Selector variable is not negated."
-                            continue
-                        else:
-                            new_line.append(str(pysat.solver_var(l)))
-                            max_var = max(abs(pysat.solver_var(l)), max_var)
-                    # print(sel_vars)
-
-                    new_line.append("0")
-                    
-                    if real_group:
-                        soft_lines.append(" ".join(new_line))
-                        # new_lines.insert(real_count + 1, " ".join(new_line))
-                    else:
-                        hard_lines.append(" ".join(new_line))
-                        # new_lines.append(" ".join(new_line))
-                    
-            # Construct GCNF file content
-            nb_vars = max_var
-            # nb_vars = 2
-            nb_clauses = len(soft_lines) + len(hard_lines)
-            nb_groups = max_group
-            header = f"p gcnf {nb_vars} {nb_clauses} {nb_groups}"
-            new_lines = [header] + soft_lines + hard_lines
-            dimacs_gcnf = "\n".join(new_lines) + "\n"
-            
-            with open(gcnf_output_path, "w") as f:
-                f.write(dimacs_gcnf)
-
-            # ------------------- End of Conversion Logic -------------------
-            
-            # --- NEW PRINT FOR CNF-to-GCNF TIME ---
-            time_cnf_to_gcnf = time.time() - time_cnf_to_gcnf
-            self.print_comment(f"took {time_cnf_to_gcnf:.4f} seconds to convert CNF to GCNF")
-            # ------------------------------------
-
-            self.print_comment(f"took {time_cp_to_cnf + time_cnf_to_gcnf:.4f} seconds to convert")
+            self.print_comment(f"took {time_cp_to_cnf:.4f} seconds to convert")
             
             # ... (return value structure would go here, e.g., a dictionary of results) ...
             return {
                 'status': 'CONVERTED',
-                'time_total': time_parse + time_cp_to_cnf + time_cnf_to_gcnf,
+                'time_total': time_parse + time_cp_to_cnf,
                 'time_convert': time_cp_to_cnf,
                 'cnf_path': str(cnf_output_path),
                 'gcnf_path': str(gcnf_output_path),
