@@ -4,7 +4,7 @@ import tempfile
 
 import pytest
 import cpmpy as cp
-from cpmpy.tools.dimacs import read_dimacs, write_dimacs, write_gcnf
+from cpmpy.tools.dimacs_ import read_dimacs, write_dimacs, write_gcnf
 from cpmpy.transformations.get_variables import get_variables_model
 from cpmpy.solvers.solver_interface import ExitStatus
 from cpmpy.solvers.pindakaas import CPM_pindakaas
