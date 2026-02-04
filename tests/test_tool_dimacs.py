@@ -4,7 +4,7 @@ import tempfile
 
 import pytest
 import cpmpy as cp
-from cpmpy.tools.dimacs import read_dimacs, write_dimacs, write_gcnf
+from cpmpy.tools.dimacs_ import read_dimacs, write_dimacs, write_gcnf
 from cpmpy.transformations.get_variables import get_variables_model
 from cpmpy.solvers.solver_interface import ExitStatus
 from cpmpy.solvers.pindakaas import CPM_pindakaas
@@ -185,5 +185,7 @@ class TestDimacs:
         print("case", case)
         soft, hard = case
         fname = tempfile.mktemp()
-        write_gcnf(soft, hard=hard, name="a", encoding="direct", normalize=True, fname=fname)
+
+        a = write_gcnf(soft, hard=hard, name="a", normalize=False, fname="/tmp/a.gcnf")
+        b = write_gcnf(soft, hard=hard, name="a", normalize=True, fname="/tmp/b.gcnf")
 

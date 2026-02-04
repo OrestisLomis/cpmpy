@@ -78,48 +78,60 @@ def to_gcnf(soft, hard=[], name=None, csemap=None, ivarmap=None, encoding="auto"
         **{a: [] for a in assump},  # assumption mapped to its soft clauses
     }
 
-    def add_gcnf_clause_(lits):
-        # find the assumption variable (not guaranteed to be first)
-        i = next((i for i, l in enumerate(lits) if (~l) in assump), None)
-        if i:
-            constraints[~lits[i]].append(cp.any(l for i_, l in enumerate(lits) if i_ != i))
-        else:
-            # hard clause (w/o assumption var)
-            constraints[True].append(cp.any(lits))
-
-    def add_gcnf_clause(cpm_expr):
+    def add_gcnf_clause(cpm_expr, cl_db=set()):
         for clause in _to_clauses(cpm_expr):
+            # assumption var is often the first literal, but this is not guaranteed
             i = next((i for i, l in enumerate(clause) if (~l) in assump), None)
             if i is None:
-                # hard clause (w/o assumption var)
+                if normalize:
+                    cl_set = frozenset(clause)
+                    if cl_set in cl_db:
+                        # make new variable for duplicate clause
+                        f = cp.boolvar()
+                        clause = [f]
+                        # then add `f -> c_b` as a hard clause
+                        constraints[True].append(cp.any([~f] + clause))
+                        # hard clause (w/o assumption var)
+                    else:
+                    # if normalize:
+                        cl_db.add(cl_set)
                 constraints[True].append(cp.any(clause))
             else:
                 # soft clause
-                constraints[~clause[i]].append(cp.any(l for i_, l in enumerate(clause) if i_ != i))
-
-    for c in cnf:
-        add_gcnf_clause(c)
-
-    if normalize:
-        # to make groups disjoint..
-        for (a, g_a), (b, g_b) in all_pairs(constraints.items()):
-            for i, c_a in enumerate(g_a):
-                for j, c_b in enumerate(g_b):
-                    # TODO efficiency, plus account for shuffled literals
-                    # ..we find shared clauses between any two groups..
-                    if c_a == c_b:
-                        # ..in the second group, we replace the clause `c_b` for unit clause `f`
+                if normalize:
+                    cl_set = frozenset(clause[:i] + clause[i+1:])
+                    if cl_set in cl_db:
+                        # make new variable for duplicate clause
                         f = cp.boolvar()
-                        g_b[j] = f
+                        new_clause = [f]
                         # then add `f -> c_b` as a hard clause
-                        add_gcnf_clause(f.implies(c_b))
+                        constraints[True].append(cp.any([~f] + list(cl_set)))
+                        # hard clause (w/o assumption var)
+                        constraints[~clause[i]].append(cp.any([f]))
+                    else:
+                    # if normalize:
+                        cl_db.add(frozenset(cl_set))
+                        constraints[~clause[i]].append(cp.any(l for i_, l in enumerate(clause) if i_ != i))
 
-        for g_a, g_b in all_pairs(constraints.values()):
-            for c_a in g_a:
-                for c_b in g_b:
-                    assert not (c_a == c_b), "Still not disjoint"
+    cl_db = set()
+    
+    for c in cnf:
+        add_gcnf_clause(c, cl_db)
 
-
+    # if normalize:
+    #     # to make groups disjoint..
+    #     for (a, g_a), (b, g_b) in all_pairs(constraints.items()):
+    #         for i, c_a in enumerate(g_a):
+    #             for j, c_b in enumerate(g_b):
+    #                 # TODO efficiency, plus account for shuffled literals
+    #                 # ..we find shared clauses between any two groups..
+    #                 if c_a == c_b:
+    #                     # ..in the second group, we replace the clause `c_b` for unit clause `f`
+    #                     f = cp.boolvar()
+    #                     g_b[j] = f
+    #                     # then add `f -> c_b` as a hard clause
+    #                     # add_gcnf_clause(f.implies(c_b))
+    #                     add_gcnf_clause([~f].extend(c_b), cl_db)
 
     return (
         cp.Model(cnf),
