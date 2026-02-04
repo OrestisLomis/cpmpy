@@ -1162,24 +1162,30 @@ class Benchmark(ABC):
             # NOTE: self.read_instance needs to handle the decompression of .opb.xz 
             # and return the cpmpy Model object.
             model = self.read_instance(instance, open=open) 
+            
+            
+            # ------------------------ Post CPMpy model to solver ------------------------ #
+
+            # Setup for conversion: This part prepares the model components needed for CNF generation
+            assump_model, _, assumps = make_assump_model(model.constraints, name="sel")
             time_parse = time.time() - time_parse
+            # print(model)
             
             if verbose: self.print_comment(f"took {time_parse:.4f} seconds to parse model")
 
             if time_limit and time_limit < _wall_time(p):
                 raise TimeoutError("Time's up after parse")
             
-            # ------------------------ Post CPMpy model to solver ------------------------ #
-
-            # Setup for conversion: This part prepares the model components needed for CNF generation
-            assump_model, _, assumps = make_assump_model(model.constraints, name="sel")
-            # print(model)
-            
             start_cp_to_cnf = time.time()
             
-            pysat = CPM_pysat(assump_model)
+            
             
             clauses = to_cnf(assump_model.constraints)
+            
+            cnf_model = cp.Model(clauses)
+            pysat = cp.SolverLookup.get("pysat:Cadical195", cnf_model)
+            
+            # assert not pysat.solve(assumptions=list(assumps)), "The CNF model is SAT"
             
             # ------------------------------- Solve model / Convert ------------------------------- #
             
@@ -1189,16 +1195,14 @@ class Benchmark(ABC):
                 self.set_time_limit(None) # Disable signal-based time limit for the main block
                 if verbose: self.print_comment(f"{time_limit_remaining}s left for conversion")
             
-            time_solve = time.time() # Start total conversion timer
 
             # --- 1. PB to CNF Conversion ---
             if verbose: self.print_comment(f"Starting PB-to-CNF conversion...")
 
-            time_pb_to_cnf = time.time()
             
             # --- NEW PRINT FOR PB-to-CNF TIME ---
-            time_pb_to_cnf = time.time() - time_pb_to_cnf
-            self.print_comment(f"took {time_pb_to_cnf:.4f} seconds to convert PB to CNF")
+            time_cp_to_cnf = time.time() - start_cp_to_cnf
+            self.print_comment(f"took {time_cp_to_cnf:.4f} seconds to convert PB to CNF")
             # ------------------------------------
 
             # --- 2. CNF to GCNF Conversion (Optimized) ---
@@ -1287,14 +1291,13 @@ class Benchmark(ABC):
             self.print_comment(f"took {time_cnf_to_gcnf:.4f} seconds to convert CNF to GCNF")
             # ------------------------------------
 
-            time_solve = time.time() - time_solve # Total conversion time
-            self.print_comment(f"took {time_solve:.4f} seconds to convert")
+            self.print_comment(f"took {time_cp_to_cnf + time_cnf_to_gcnf:.4f} seconds to convert")
             
             # ... (return value structure would go here, e.g., a dictionary of results) ...
             return {
                 'status': 'CONVERTED',
-                'time_total': time_parse + time_solve,
-                'time_convert': time_solve,
+                'time_total': time_parse + time_cp_to_cnf + time_cnf_to_gcnf,
+                'time_convert': time_cp_to_cnf,
                 'cnf_path': str(cnf_output_path),
                 'gcnf_path': str(gcnf_output_path),
                 'nb_vars_gcnf': nb_vars,
