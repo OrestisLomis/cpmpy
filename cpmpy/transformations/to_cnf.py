@@ -65,7 +65,7 @@ def to_cnf(constraints, csemap=None, ivarmap=None, encoding="auto"):
     return clauses
 
 
-def to_gcnf(soft, hard=None, name=None, csemap=None, ivarmap=None, encoding="auto", normalize=False):
+def to_gcnf(soft, hard=[], name=None, csemap=None, ivarmap=None, encoding="auto", normalize=False):
     """
     Or `make_assump_cnf`; returns an assumption CNF model, and separately the soft clauses, hard clauses, and assumption variables. Follows https://satisfiability.org/competition/2011/rules.pdf, however, there is no guarantee that the groups are disjoint.
     """
