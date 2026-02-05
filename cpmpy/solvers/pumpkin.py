@@ -103,13 +103,15 @@ class CPM_pumpkin(SolverInterface):
         except PackageNotFoundError:
             return None
 
-    def __init__(self, cpm_model=None, subsolver=None):
+    def __init__(self, cpm_model=None, subsolver=None, proof=None, seed=None):
         """
         Constructor of the native solver object
 
         Arguments:
             cpm_model: Model(), a CPMpy Model() (optional)
             subsolver: None, not used
+            proof (str, optional): path to the proof file
+            seed (int, optional): ranomd seed for the solver
         """
         if not self.supported():
             raise ModuleNotFoundError("CPM_pumpkin: Install the python package 'cpmpy[pumpkin]' to use this solver interface.")
@@ -119,12 +121,22 @@ class CPM_pumpkin(SolverInterface):
         assert subsolver is None 
 
         # initialise the native solver object
-        self.pum_solver = Model() 
+        init_kwargs = dict()
+        if proof is not None:
+            init_kwargs['proof'] = proof
+        if seed is not None:
+            init_kwargs['seed'] = seed
+        self._proof = proof
+        self.pum_solver = Model(**init_kwargs)
         self.predicate_map = {} # cache predicates for reuse
+        self.bool_to_int_map = {} # cache calls to `self.pum_solver.boolean_as_integer`
 
         # for objective
         self._objective = None
         self.objective_is_min = True
+
+        # for solution hint
+        self._solhint = None
 
         # initialise everything else and post the constraints/objective
         super().__init__(name="pumpkin", cpm_model=cpm_model)
@@ -137,7 +149,7 @@ class CPM_pumpkin(SolverInterface):
         return self.pum_solver
 
 
-    def solve(self, time_limit:Optional[float]=None, prove=False, proof_name="proof.drcp", proof_location=".", assumptions:Optional[List[_BoolVarImpl]]=None):
+    def solve(self, time_limit:Optional[float]=None, prove=False, assumptions:Optional[List[_BoolVarImpl]]=None, **kwargs):
         """
         Call the Pumpkin solver
 
@@ -159,20 +171,26 @@ class CPM_pumpkin(SolverInterface):
         # ensure all vars are known to solver
         self.solver_vars(list(self.user_vars))
 
+        if "proof" in kwargs or "prove" in kwargs or "prove_location" in kwargs or "proof_name" in kwargs:
+            raise ValueError("Proof-file should be supplied in the constructor, not as a keyword argument to solve."
+                             "`cpmpy.SolverLookup.get('pumpkin', model, proof='path/to/proof.drcp')`")
+
         # parse and dispatch the arguments
         if time_limit is not None and time_limit < 0:
             raise ValueError("Time limit cannot be negative, but got {time_limit}")
-        kwargs = dict(timeout=time_limit)
+        
+        kwargs.update(timeout=time_limit)
 
         if self.has_objective():
             assert assumptions is None, "Optimization under assumptions is not supported"
             solve_func = self.pum_solver.optimise
-            kwargs.update(proof=join(proof_location, proof_name) if prove else None,
-                          objective=self.solver_var(self._objective),
+            kwargs.update(objective=self.solver_var(self._objective),
                           direction=Direction.Minimise if self.objective_is_min else Direction.Maximise)
+            if self._solhint is not None:
+                kwargs.update(warm_start=self._solhint)
 
         elif assumptions is not None:
-            assert not prove, "Proof-logging under assumptions is not supported"
+            assert self._proof is None, "Proof-logging under assumptions is not supported"
             pum_assumptions = [self.to_predicate(a, tag=None) for a in assumptions]
             self.assump_map = dict(zip(pum_assumptions, assumptions))
             solve_func = self.pum_solver.satisfy_under_assumptions
@@ -180,7 +198,6 @@ class CPM_pumpkin(SolverInterface):
 
         else:
             solve_func = self.pum_solver.satisfy
-            kwargs.update(proof=join(proof_location, proof_name) if prove else None)
 
         self._pum_core = None
         
@@ -415,7 +432,9 @@ class CPM_pumpkin(SolverInterface):
         if is_any_list(cpm_var):
             return [self.to_pum_ivar(v, tag=tag) for v in cpm_var]
         elif isinstance(cpm_var, _BoolVarImpl):
-            return self.pum_solver.boolean_as_integer(self.solver_var(cpm_var), tag=tag)
+            if cpm_var not in self.bool_to_int_map:
+                self.bool_to_int_map[cpm_var] = self.pum_solver.boolean_as_integer(self.solver_var(cpm_var), tag=tag)
+            return self.bool_to_int_map[cpm_var]
         elif is_num(cpm_var):
             return self.solver_var(intvar(cpm_var, cpm_var))
         # can also be a scaled variable (multiplication view)
@@ -435,27 +454,15 @@ class CPM_pumpkin(SolverInterface):
 
             :return: Returns a list of Pumpkin integer expressions
         """
-        args = []
         if tag is None: raise ValueError("Expected tag to be provided but got None")
         if isinstance(expr, Operator) and expr.name == "sum":
-            for cpm_var in expr.args:
-                pum_var = self.solver_var(cpm_var)
-                if cpm_var.is_bool(): # have convert to integer
-                    pum_var = self.pum_solver.boolean_as_integer(pum_var, tag=tag)
-                args.append(pum_var.scaled(-1 if negate else 1))
+            pum_vars = self.to_pum_ivar(expr.args, tag=tag)
+            args = [pv.scaled(-1) if negate else pv for pv in pum_vars]
         elif isinstance(expr, Operator) and expr.name == "wsum":
-            for w, cpm_var in zip(*expr.args):
-                if w == 0: continue # exclude
-                pum_var = self.solver_var(cpm_var)
-                if cpm_var.is_bool(): # have convert to integer
-                    pum_var = self.pum_solver.boolean_as_integer(pum_var, tag=tag)
-                args.append(pum_var.scaled(-w if negate else w))
+            pum_vars = self.to_pum_ivar(expr.args[1], tag=tag)
+            args = [pv.scaled(-w if negate else w) for w,pv in zip(expr.args[0], pum_vars) if w != 0]
         elif isinstance(expr, Operator) and expr.name == "sub":
-            x, y = self.solver_vars(expr.args)
-            if expr.args[0].is_bool():
-                x = self.pum_solver.boolean_as_integer(x, tag=tag)
-            if expr.args[1].is_bool():
-                y = self.pum_solver.boolean_as_integer(y, tag=tag)
+            x, y = self.to_pum_ivar(expr.args, tag=tag)
             args = [x.scaled(-1 if negate else 1), y.scaled(1 if negate else -1)]
         else:
             raise ValueError(f"Unknown expression to convert in sum-arguments: {expr}")
@@ -646,3 +653,13 @@ class CPM_pumpkin(SolverInterface):
         assert self._pum_core is not None, "Can only get core if the last solve-call was unsatisfiable under assumptions"
         return [self.assump_map[pred] for pred in self._pum_core]
 
+    def solution_hint(self, cpm_vars: List[_NumVarImpl], vals: List[int]):
+        """
+        Pumpkin supports warmstarting the solver with a (in)feasible solution.
+        The provided value will affect branching heurstics during solving, making it more likely the final solution will contain the provided assignment.
+        Technical side-node: only used during optimization.
+
+        :param cpm_vars: list of CPMpy variables
+        :param vals: list of (corresponding) values for the variables
+        """
+        self._solhint = {self.solver_var(v) : val for v, val in zip(cpm_vars, vals)} # store for later use in solve
