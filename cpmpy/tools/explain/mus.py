@@ -272,7 +272,7 @@ def cp_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
     # make assumption (indicator) variables and soft-constrained model
     (m, soft, assump) = make_assump_model(soft, hard=hard, name="mus_sel")
     
-    print(f"assumption model: {m}")
+    # print(f"assumption model: {m}")
     
     print(f"there are {len(assump)} soft constraints")
     
@@ -488,7 +488,7 @@ def cp_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
         assert len(mus(list(found_cons), hard=hard, solver=solver)[0]) == len(found), "MUS: final core is not a MUS"
 
     
-    return [dmap[c] for c in found], nb_removed_refinement, nb_found_mr, nb_found_symm, sat_calls, unsat_calls, total_solve_time
+    return found, nb_removed_refinement, nb_found_mr, nb_found_symm, sat_calls, unsat_calls, total_solve_time
 
 def pb_mus_group(soft, hard=[], solver="exact", clause_set_refinement=True, init_check=True, assumption_removal=False, redundancy_removal=False, sorting="length", reversed_order=True, model_rotation=False, maximize_cons=False, recursive=True, assertions=False, use_symmetries=False, time_limit=1800, **kwargs):
     """

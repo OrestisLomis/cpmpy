@@ -31,7 +31,7 @@ from natsort import natsorted
 from cpmpy.tools.explain.symmetries import RowSymmetry, Permutation
 
 BREAKID_PATH = "/home/orestis_ubuntu/work/breakid/src/BreakID"
-BREAKID_PATH = "/cw/dtailocal/orestis//BreakID-2.5"
+# BREAKID_PATH = "/cw/dtailocal/orestis//BreakID-2.5"
 
 class BreakID:
     """

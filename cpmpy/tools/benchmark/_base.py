@@ -70,7 +70,7 @@ from cpmpy.transformations.to_cnf import to_cnf
 
 # # --- Configuration (Define these paths outside the function, e.g., in self or module globals) ---
 path = "/home/orestis_ubuntu/work/"
-path = "/cw/dtailocal/orestis/"
+# path = "/cw/dtailocal/orestis/"
 OUTPUT_CNF_DIR = f"{path}benchmarks/2025/XCSP_CNF/" 
 OUTPUT_GCNF_DIR = f"{path}benchmarks/2025/XCSP_GCNF/" 
 Path(OUTPUT_CNF_DIR).mkdir(parents=True, exist_ok=True)
