@@ -83,7 +83,7 @@ def solution_opb(model):
                 return "1"
             idx = int(var.name.replace("x[","").replace("]",""))
             bitstring = bitstring[:idx] + "1" + bitstring[idx+1:]
-    return bitstring
+    # return bitstring
     return ""
     return " ".join([var.name.replace("[","").replace("]","") if var.value() else "-"+var.name.replace("[","").replace("]","") for var in variables])
 

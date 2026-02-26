@@ -31,7 +31,7 @@ from .utils import make_assump_model, replace_cons_with_assump, OCUSException
 from .utils import get_length_gen, make_assump_model, get_slack, get_degree_over_sum, get_max_sat, get_min_sat, get_length, rotate_model, rotate_model_cp, rotate_model_old, rotate_model_group
 
 # @profile
-def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=False, init_check=False, assumption_removal=False, redundancy_removal=False, sorting="length", reversed_order=True, model_rotation=False, maximize_cons=False, recursive=True, assertions=False, use_symmetries=False, block=True, depth=None, eager=False, cascade=True, time_limit=1800, **kwargs):
+def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check=False, assumption_removal=False, redundancy_removal=False, sorting=None, reversed_order=True, model_rotation=False, maximize_cons=False, recursive=True, assertions=False, use_symmetries=False, block=True, depth=None, eager=False, cascade=True, time_limit=1800, **kwargs):
     """
         A PB-level deletion-based MUS algorithm using assumption variables
         and unsat core extraction
@@ -63,6 +63,8 @@ def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=False, init_chec
     # make assumption (indicator) variables and soft-constrained model
     (m, soft, assump) = make_assump_model(soft, hard=hard, name="mus_sel")
     
+    print(f"there are {len(assump)} soft constraints")
+    
     if use_symmetries:
         breakid = BreakID(BREAKID_PATH)  # use pb branch
         permutations, matrices = breakid.get_generators(m.constraints, format="opb", subset=assump,pb=31, no_row=False)
@@ -84,13 +86,13 @@ def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=False, init_chec
     
     core_size = len(assump)
     
-    vars = get_variables_model(m)
     
     if not block:
     
+        vars = get_variables_model(m)   
         seen = np.full((core_size, len(vars)), False)
         
-        c_index = dict(zip(soft, np.arange(core_size)))
+        c_index = dict(zip(assump, np.arange(core_size)))
         v_index = dict(zip(vars, np.arange(len(vars))))
         print(f"vars: {len(vars)}")
         print(f"cons: {core_size}")
@@ -138,18 +140,22 @@ def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=False, init_chec
     }
     
     found = set() # keep track of found transition constraints
-    found_cons = set()
     
     
+    if sorting is not None:
+        schedule = sorted(core, key=lambda c : heuristics[sorting](dmap[c]), reverse=reversed_order)
+    else:
+        schedule = list(core)
+        
+    solve_times = []
     
-    for c in sorted(core, key=lambda c : heuristics[sorting](dmap[c]), reverse=reversed_order):
+    for c in schedule:
         # print(f"Checking {c}")
         if c not in core:
             # print(f"skipping {dmap[c]}")
             continue # already removed
-        if (model_rotation or use_symmetries) and dmap[c] in found_cons:
-            found.add(c)
-            continue
+        if c in found:
+            continue # already found through MR or SYMM
         
         core_size = len(core)
         
@@ -170,6 +176,15 @@ def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=False, init_chec
             s.solve(assumptions=assumps, **kwargs)
         
         last_call_time = time.time() - start_solve
+    
+        solve_times.append(last_call_time)
+
+        if len(solve_times) >= 50:
+            avg = sum(solve_times) / len(solve_times)
+            max_t = max(solve_times)
+            print(f"[Batch Update] Last 50 calls: Avg {avg:.4f}s, Max {max_t:.4f}s | Core size: {len(core)} | found in MUS so far: {len(found)}")
+            solve_times = [] # Reset
+            
         # print(last_call_time)
         total_solve_time += last_call_time
         if s.status().exitstatus == ExitStatus.FEASIBLE or s.status().exitstatus == ExitStatus.OPTIMAL:
@@ -180,29 +195,36 @@ def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=False, init_chec
             if assumption_removal:
                 s += c # permanently set to true
             found.add(c) # add to found transition constraints
-            found_cons.add(dmap[c])
             if model_rotation:   
-                if maximize_cons and 3*last_call_time < time_limit - (time.time() - start):
-                    s.maximize(dmap[c].args[0])
-                    new_t_limit = max(0.001, 3*last_call_time)
-                    s.solve(time_limit=new_t_limit, assumptions=assumps, **kwargs)
+                # if maximize_cons and 3*last_call_time < time_limit - (time.time() - start):
+                #     s.maximize(dmap[c].args[0])
+                #     new_t_limit = max(0.001, 3*last_call_time)
+                #     s.solve(time_limit=new_t_limit, assumptions=assumps, **kwargs)
 
                 # for constraint_check in [dmap[c] for c in core] + hard:
                 #     if constraint_check is dmap[c]:
                 #         continue
                 #     assert get_slack(constraint_check, assoc) >= 0, f"Constraint {dmap[constraint_check]} has negative slack {get_slack(dmap[constraint_check], assoc)}"
-                found_size = len(found_cons)
-                new_rots = rotate_model([dmap[c] for c in core] + hard, dmap[c], found_cons, recursive=recursive, depth=depth, block=block, seen=seen, c_index=c_index, v_index=v_index, eager=eager, hard=hard, cascade=cascade)
-                found_cons.update(new_rots)
+                found_size = len(found)
+                rots = set()
+                # print("+MR", flush=True)
+                rotate_model(dmap, c, found, core, recursive=recursive, depth=depth, rots=rots, block=block, seen=seen, c_index=c_index, v_index=v_index, eager=eager, hard=hard, cascade=cascade)
+                # print("-MR", flush=True)
+                
+                new_found = rots.difference(found)
+                
+                found.update(rots)
+                
+                if assumption_removal:
+                    for f in new_found:
+                        s += f # permanently set to true
                 # print(f"Model rotation found {len(found) - found_size} new transition constraints")
-                nb_found_mr += len(found_cons) - found_size
+                nb_found_mr += len(new_found)
                 # TODO: skip over found transition constraints
                 
             if use_symmetries:
                 for symm in symmetries:
                     new_found = symm.get_symmetric_images_in_subset(core, c)
-                    for c in new_found:
-                        found_cons.add(dmap[c])
                     found_size = len(found)
                     found.update(new_found)
                     nb_found_symm += len(found) - found_size
@@ -211,6 +233,7 @@ def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=False, init_chec
                 # print(f"constraint: {dmap[c]}")
                 # print(f"vars: {dec_vars.value()}")
                 # print(f"constraint slack: {get_slack(dmap[c], dec_vars)}")
+            # print(f"constraints in MUS so far: {len(found)}", flush=True)
         elif s.status().exitstatus == ExitStatus.UNSATISFIABLE: # UNSAT, use new solver core (clause set refinement)
             unsat_calls += 1
             if clause_set_refinement:
@@ -218,6 +241,7 @@ def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=False, init_chec
                 if redundancy_removal:
                     # s += ~red_var # remove red constraint
                     if red_var in new_core:
+                        # print(f"core size: {len(core)}", flush=True)
                         continue
                 nb_removed_refinement += len(core) - len(new_core)
                 if assumption_removal:
@@ -226,6 +250,7 @@ def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=False, init_chec
                         s += ~r # permanently set to false
                     s += ~c # permanently set to false
                 core = new_core
+                # print(f"core size: {len(core)}", flush=True)
         # print(f"Model: {m}")
         else:
             raise RuntimeError(f"MUS: solver returned unexpected status {s.status().exitstatus}")
@@ -234,7 +259,7 @@ def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=False, init_chec
     # print(f"Total solve time: {total_solve_time}")
     if assertions:
         
-        assert len(mus(list(found_cons), hard=hard, solver=solver)[0]) == len(found), "MUS: final core is not a MUS"
+        assert len(mus([dmap[c] for c in found], hard=hard, solver=solver)) == len(found), "MUS: final core is not a MUS"
 
     return found, nb_removed_refinement, nb_found_mr, nb_found_symm, sat_calls, unsat_calls, total_solve_time
 
@@ -464,7 +489,7 @@ def cp_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
                 # print("-SYMM")
                 # print(f"  - found {len(found) - found_size} new constraints via symmetries")
                 nb_found_symm += len(found) - found_size
-            print(f"constraints in MUS so far: {len(found)}")
+            print(f"constraints in MUS so far: {len(found_cons)}")
         elif s.status().exitstatus == ExitStatus.UNSATISFIABLE: # UNSAT, use new solver core (clause set refinement)
             unsat_calls += 1
             if clause_set_refinement:

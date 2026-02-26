@@ -468,9 +468,12 @@ def rotate_model_old(constraints, constraint, depth=None, recursive=True, found=
 
     return
 
-def rotate_model(constraints, constraint, criticals, depth=None, recursive=True, rots=set(), hard=[], block=True, seen=[], c_index=None, v_index=None, eager=False, cascade=True):    
+def rotate_model(constraints, sel_var, criticals, core, depth=None, recursive=True, rots=None, hard=[], block=True, seen=[], c_index=None, v_index=None, eager=False, cascade=True):    
+    if rots is None:
+        rots = set()
     if depth == 0:
         return set()
+    constraint = constraints[sel_var]
     lits = get_lits(constraint)
     slack = get_slack(constraint)
     
@@ -486,49 +489,54 @@ def rotate_model(constraints, constraint, criticals, depth=None, recursive=True,
             count = 0
             
             bad_rot = False # flag to avoid bad rotations
+            
+            for h in hard:
+                if not h.value():
+                    bad_rot = True
+                    break
+            
+            if bad_rot:
+                continue
+            
             # loop over constraints in model, if only one will become false then add it to found and rotate recursively
-            for constraint_check in constraints:
+            for sel_check, constraint_check in constraints.items():
                 # print(constraint_check)
-                if constraint_check is constraint:
+                if sel_check is sel_var or sel_check not in core:
                     continue
                 neg_lit = ~lit
                 # slack_other = get_slack(constraint_check, assoc)
                 under_const = slack_under(constraint_check, get_coefficient_lit(constraint_check, neg_lit))
                 if under_const:
                     count += 1
-                    last = constraint_check
+                    last_id = sel_check
+                    
+                    if count > 1:
+                        break
                     
                     # print(seen)
                     # print(v_index)
                     # print(seen[c_index[constraint_check], v_index[get_var(lit)]])
                     # print(np.sum(seen[c_index[constraint_check], :]))
-                    if constraint_check in hard:
+                    if not eager and sel_check in criticals:
                         bad_rot = True
                         break
-                    if not eager and constraint_check in criticals:
+                    elif block and sel_check in rots:
                         bad_rot = True
                         break
-                    elif block and constraint_check in rots:
-                        bad_rot = True
-                        break
-                    elif not block and (seen[c_index[constraint_check], v_index[get_var(lit)]] or np.sum(seen[c_index[constraint_check], :]) >= 1):
+                    elif not block and (seen[c_index[sel_check], v_index[get_var(lit)]] or np.sum(seen[c_index[sel_check], :]) >= 1):
                         bad_rot = True
                         break
                     
                     if not block:
-                        seen[c_index[constraint_check], v_index[get_var(lit)]] = True
+                        seen[c_index[sel_check], v_index[get_var(lit)]] = True
                     
                     # print(constraint_check)
                     # print(seen[c_index[constraint_check], :])
                     
-                    # print(f"Would become false: {last} by flipping {lit} which has coef {get_coefficient_lit(constraint_check, neg_lit)}")
-                    if count > 1:
-                        # print("More than one constraint would become false, stopping rotation here")
-                        break
             if count == 1:
                 if bad_rot:
                     continue
-                rots.add(last)
+                rots.add(last_id)
                 
                 
                 # rotated_assoc = assoc.copy()
@@ -537,8 +545,7 @@ def rotate_model(constraints, constraint, criticals, depth=None, recursive=True,
                     # print("Rotating model:", assoc)
                     flip_literal(lit)
                     # print(f"flipped {lit.name} to {lit.value()}")
-                    new_rots = rotate_model(constraints, last, criticals, depth=depth-1 if depth is not None else None, block=block, rots=rots, recursive=recursive, seen=seen, c_index=c_index, v_index=v_index, cascade=cascade)
-                    rots.update(new_rots)
+                    rotate_model(constraints, last_id, criticals, core, depth=depth-1 if depth is not None else None, block=block, rots=rots, recursive=recursive, seen=seen, c_index=c_index, v_index=v_index, cascade=cascade)
                     flip_literal(lit)
                     # print(f"flipped {lit.name} back to {lit.value()}")
                 
@@ -556,7 +563,70 @@ def rotate_model(constraints, constraint, criticals, depth=None, recursive=True,
     
     # print(f"Finished rotation at depth {depth}")
 
-    return rots
+    return
+
+# def rotate_model_iterative(constraints, initial_sel_var, criticals, core, depth=None, block=True, eager=False, cascade=True, c_index=None, v_index=None, seen=None):
+#     rots = set()
+#     # The stack stores: (current_sel_var, literal_iterator, current_depth)
+#     # We use an iterator so we know exactly where we left off in the for-loop.
+#     stack = [(initial_sel_var, iter(get_lits(constraints[initial_sel_var])), depth)]
+    
+#     # Track which literal is currently flipped for each level of the stack
+#     # to mimic the "flip back" logic after the recursive call.
+#     active_flips = []
+
+#     while stack:
+#         sel_var, lits_iter, current_depth = stack[-1]
+        
+#         # Check depth limit
+#         if current_depth == 0:
+#             stack.pop()
+#             continue
+
+#         try:
+#             # Get the next literal in the current constraint's loop
+#             lit = next(lits_iter)
+            
+#             # --- START OF YOUR ORIGINAL LOOP LOGIC ---
+#             constraint = constraints[sel_var]
+#             slack = get_slack(constraint) # Note: You'll need to manage slack if it changes
+            
+#             if not is_false(lit):
+#                 if cascade:
+#                     # Handle your cascade logic here if needed
+#                     pass
+#                 continue
+
+#             c = get_coefficient_lit(constraint, lit)
+#             if c < -slack:
+#                 continue
+
+#             # ... [Insert your bad_rot and count check logic here] ...
+#             # (Assuming count == 1 and bad_rot == False is met):
+            
+#             if count == 1 and not bad_rot:
+#                 rots.add(last_id)
+                
+#                 # Perform the "Before" action
+#                 flip_literal(lit)
+#                 active_flips.append(lit)
+                
+#                 # PUSH TO STACK (The "Recursive Call")
+#                 new_depth = current_depth - 1 if current_depth is not None else None
+#                 stack.append((last_id, iter(get_lits(constraints[last_id])), new_depth))
+                
+#                 # We break the inner processing to "recurse" into the new stack item
+#                 continue 
+
+#         except StopIteration:
+#             # This level is finished (the for-loop ended)
+#             stack.pop()
+#             # If we had a literal flipped for the level we just finished, flip it back!
+#             if active_flips:
+#                 last_lit = active_flips.pop()
+#                 flip_literal(last_lit)
+
+#     return rots
 
 def rotate_model_cp(constraints, constraint, criticals, depth=None, recursive=True, rots=set(), hard=[], block=True, seen=[], c_index=None, v_index=None, eager=False):
     if depth == 0:
