@@ -209,7 +209,7 @@ def _decide_encoding(x, cmp=None, encoding="auto"):
 class IntVarEnc(ABC):
     """Abstract base class for integer variable encodings."""
 
-    NAMED = False
+    NAMED = True
     """Enable to name the encoding variables semantically for debugging purposes (e.g. `BV[x == 42]` for a direct encoding variable of `x`)"""
 
     def __init__(self, x, x_enc):

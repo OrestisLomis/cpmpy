@@ -6,6 +6,7 @@ import time
 
 from tqdm import tqdm
 import cpmpy as cp
+from cpmpy.tools.explain.utils import make_assump_model
 from ..expressions.variables import _BoolVarImpl
 from ..expressions.core import Operator
 from ..solvers.pindakaas import CPM_pindakaas
