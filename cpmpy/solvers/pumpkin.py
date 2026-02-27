@@ -81,8 +81,8 @@ class CPM_pumpkin(SolverInterface):
         try:
             import pumpkin_solver as psp
             pum_version = CPM_pumpkin.version()
-            if Version(pum_version) < Version("0.2.2"):
-                warnings.warn(f"CPMpy uses features only available from Pumpkin version >=0.2.2 "
+            if Version(pum_version) < Version("0.3.0"):
+                warnings.warn(f"CPMpy uses features only available from Pumpkin version >=0.3.0 "
                               f"but you have version {pum_version}")
                 return False
             return True
@@ -111,7 +111,7 @@ class CPM_pumpkin(SolverInterface):
             cpm_model: Model(), a CPMpy Model() (optional)
             subsolver: None, not used
             proof (str, optional): path to the proof file
-            seed (int, optional): ranomd seed for the solver
+            seed (int, optional): random seed for the solver
         """
         if not self.supported():
             raise ModuleNotFoundError("CPM_pumpkin: Install the python package 'cpmpy[pumpkin]' to use this solver interface.")
@@ -129,7 +129,11 @@ class CPM_pumpkin(SolverInterface):
         self._proof = proof
         self.pum_solver = Model(**init_kwargs)
         self.predicate_map = {} # cache predicates for reuse
-        self.bool_to_int_map = {} # cache calls to `self.pum_solver.boolean_as_integer`
+        if proof is not None: # Table and friends are not supported when proof logging
+            # see https://github.com/ConSol-Lab/Pumpkin/issues/354
+            self.disabled_global_constraints = {"table", "negative_table", "InDomain"}
+        else:
+            self.disabled_global_constraints = set()
 
         # for objective
         self._objective = None
@@ -147,6 +151,16 @@ class CPM_pumpkin(SolverInterface):
             Returns the solver's underlying native model (for direct solver access).
         """
         return self.pum_solver
+
+    def _unsat_at_rootlevel(self):
+        self.cpm_status = SolverStatus(self.name)
+        self.cpm_status.exitstatus = ExitStatus.UNSATISFIABLE
+        self.cpm_status.runtime = 0 # TODO: use post-time instead?
+
+        for var in self.user_vars:
+            var._value = None
+
+        return self._solve_return(self.cpm_status)
 
 
     def solve(self, time_limit:Optional[float]=None, prove=False, assumptions:Optional[List[_BoolVarImpl]]=None, **kwargs):
@@ -167,6 +181,13 @@ class CPM_pumpkin(SolverInterface):
         from pumpkin_solver import BoolExpression as PumpkinBool, IntExpression as PumpkinInt
         from pumpkin_solver import SatisfactionResult, SatisfactionUnderAssumptionsResult
         from pumpkin_solver.optimisation import OptimisationResult, Direction
+
+        if "proof" in kwargs or "prove" in kwargs or "prove_location" in kwargs or "proof_name" in kwargs:
+            raise ValueError("Proof-file should be supplied in the constructor, not as a keyword argument to solve."
+                             "`cpmpy.SolverLookup.get('pumpkin', model, proof='path/to/proof.drcp')`")
+
+        if self.pum_solver.is_inconsistent():
+            return self._unsat_at_rootlevel()
 
         # ensure all vars are known to solver
         self.solver_vars(list(self.user_vars))
@@ -191,7 +212,7 @@ class CPM_pumpkin(SolverInterface):
 
         elif assumptions is not None:
             assert self._proof is None, "Proof-logging under assumptions is not supported"
-            pum_assumptions = [self.to_predicate(a, tag=None) for a in assumptions]
+            pum_assumptions = [self.to_predicate(a) for a in assumptions]
             self.assump_map = dict(zip(pum_assumptions, assumptions))
             solve_func = self.pum_solver.satisfy_under_assumptions
             kwargs.update(assumptions=pum_assumptions)
@@ -334,7 +355,7 @@ class CPM_pumpkin(SolverInterface):
             obj_cons += [ivar == obj_var]
             obj_var = ivar
 
-        self.add(decomp_cons + obj_cons)
+        self.add(safe_cons + decomp_cons + obj_cons)
 
         # save objective function
         self._objective = obj_var
@@ -363,8 +384,8 @@ class CPM_pumpkin(SolverInterface):
 
         cpm_cons = no_partial_functions(cpm_cons, safen_toplevel={"element", "div", "mod"}) # safen toplevel elements, assume total decomposition for partial functions
         cpm_cons = decompose_in_tree(cpm_cons,
-                                     supported=self.supported_global_constraints,
-                                     supported_reified=self.supported_reified_global_constraints,
+                                     supported=self.supported_global_constraints - self.disabled_global_constraints,
+                                     supported_reified=self.supported_reified_global_constraints - self.disabled_global_constraints,
                                      csemap=self._csemap)
         cpm_cons = flatten_constraint(cpm_cons, csemap=self._csemap)  # flat normal form
         cpm_cons = only_bv_reifies(cpm_cons, csemap=self._csemap)
@@ -376,7 +397,7 @@ class CPM_pumpkin(SolverInterface):
         cpm_cons = canonical_comparison(cpm_cons) # ensure rhs is always a constant
         return cpm_cons
 
-    def to_predicate(self, cpm_expr, tag=None):
+    def to_predicate(self, cpm_expr):
         """
             Convert a CPMpy expression to a Pumpkin predicate (comparison with constant)
         """
@@ -393,15 +414,18 @@ class CPM_pumpkin(SolverInterface):
             lhs, rhs = cpm_expr.args
             assert is_num(rhs), "rhs of comparison must be a constant to be a predicate"
 
-            if isinstance(lhs, Operator): # can be sum with single arg
+            if isinstance(lhs, Operator):  # can be sum with single arg
                 if lhs.name == "sum" and len(lhs.args) == 1:
                     lhs = lhs.args[0]
                 elif lhs.name == "wsum" and len(lhs.args[0]) == 1:
                     lhs = lhs.args[0][0] * lhs.args[1][0]
-                elif lhs.name == "mul" and is_num(lhs.args[0]):
+                else:
+                    raise ValueError(f"Lhs of predicate should be a sum with 1 argument or wsum with 1 arg, but got {lhs}")
+            elif lhs.name == 'mul':
+                if lhs.is_lhs_num:
                     lhs = lhs.args[0] * lhs.args[1]
                 else:
-                    raise ValueError(f"Lhs of predicate should be a sum with 1 argument, wsum with 1 arg, or mul with const, but got {lhs}")
+                    raise ValueError(f"Lhs of predicate should be a mul with const, but got {lhs}")
 
             if cpm_expr.name == "==": comp = Comparator.Equal
             if cpm_expr.name == "<=": comp = Comparator.LessThanOrEqual
@@ -415,33 +439,29 @@ class CPM_pumpkin(SolverInterface):
         # do we already have this predicate? 
         #  (actually, cse might already catch these...)
         if (lhs, comp, rhs) not in self.predicate_map:
-            if tag is None:
-                tag = self.pum_solver.new_constraint_tag()
-            pred = Predicate(self.to_pum_ivar(lhs, tag=tag), comp, rhs)
+            pred = Predicate(self.to_pum_ivar(lhs), comp, rhs)
             self.predicate_map[(lhs, comp, rhs)] = pred
         
         return self.predicate_map[(lhs, comp, rhs)]
 
 
 
-    def to_pum_ivar(self, cpm_var, tag=None):
+    def to_pum_ivar(self, cpm_var):
         """
             Helper function to convert (boolean) variables and constants to Pumpkin integer expressions
         """
         if is_any_list(cpm_var):
-            return [self.to_pum_ivar(v, tag=tag) for v in cpm_var]
+            return [self.to_pum_ivar(v) for v in cpm_var]
         elif isinstance(cpm_var, _BoolVarImpl):
-            if cpm_var not in self.bool_to_int_map:
-                self.bool_to_int_map[cpm_var] = self.pum_solver.boolean_as_integer(self.solver_var(cpm_var), tag=tag)
-            return self.bool_to_int_map[cpm_var]
+            return self.solver_var(cpm_var).as_integer()
         elif is_num(cpm_var):
             return self.solver_var(intvar(cpm_var, cpm_var))
-        # can also be a scaled variable (multiplication view)
-        elif isinstance(cpm_var, Operator) and cpm_var.name == "mul":
-            const, cpm_var = cpm_var.args
+        # can also be a scaled variable (Multiplication with constant first)
+        elif cpm_var.name == "mul" and cpm_var.is_lhs_num:
+            const, cpm_var = cpm_var.args[0], cpm_var.args[1]
             if not is_num(const):
                 raise ValueError(f"Cannot create view from non-constant multiplier {const} * {cpm_var}")
-            return self.to_pum_ivar(cpm_var, tag=tag).scaled(const)
+            return self.to_pum_ivar(cpm_var).scaled(const)
         else:
             return self.solver_var(cpm_var)
 
@@ -455,13 +475,13 @@ class CPM_pumpkin(SolverInterface):
         """
         if tag is None: raise ValueError("Expected tag to be provided but got None")
         if isinstance(expr, Operator) and expr.name == "sum":
-            pum_vars = self.to_pum_ivar(expr.args, tag=tag)
+            pum_vars = self.to_pum_ivar(expr.args)
             args = [pv.scaled(-1) if negate else pv for pv in pum_vars]
         elif isinstance(expr, Operator) and expr.name == "wsum":
-            pum_vars = self.to_pum_ivar(expr.args[1], tag=tag)
+            pum_vars = self.to_pum_ivar(expr.args[1])
             args = [pv.scaled(-w if negate else w) for w,pv in zip(expr.args[0], pum_vars) if w != 0]
         elif isinstance(expr, Operator) and expr.name == "sub":
-            x, y = self.to_pum_ivar(expr.args, tag=tag)
+            x, y = self.to_pum_ivar(expr.args)
             args = [x.scaled(-1 if negate else 1), y.scaled(1 if negate else -1)]
         else:
             raise ValueError(f"Unknown expression to convert in sum-arguments: {expr}")
@@ -478,8 +498,8 @@ class CPM_pumpkin(SolverInterface):
                 return True
             if cpm_expr.name == "wsum" and len(cpm_expr.args[0]) == 1:
                 return True
-            if cpm_expr.name == "mul" and is_num(cpm_expr.args[0]):
-                return True
+        elif cpm_expr.name == 'mul' and cpm_expr.is_lhs_num:
+            return True
         return False
 
     def _get_constraint(self, cpm_expr, tag=None):
@@ -505,7 +525,7 @@ class CPM_pumpkin(SolverInterface):
             assert isinstance(lhs, Expression), f"Expected a CPMpy expression on lhs but got {lhs} of type {type(lhs)}"
 
             if self._is_predicate(lhs):
-                pred = self.to_predicate(cpm_expr, tag=tag)
+                pred = self.to_predicate(cpm_expr)
                 return [constraints.Clause([self.pum_solver.predicate_as_boolean(pred, tag=tag)], constraint_tag=tag)]
 
             if cpm_expr.name == "==":
@@ -513,21 +533,21 @@ class CPM_pumpkin(SolverInterface):
                 if "sum" in lhs.name or lhs.name == "sub":
                     return [constraints.Equals(self._sum_args(lhs, tag=tag), rhs, constraint_tag=tag)]
                
-                pum_rhs = self.to_pum_ivar(rhs, tag=tag) # other operators require IntExpression
+                pum_rhs = self.to_pum_ivar(rhs) # other operators require IntExpression
                 if lhs.name == "div":
-                    return [constraints.Division(*self.to_pum_ivar(lhs.args, tag=tag), pum_rhs, constraint_tag=tag)]
+                    return [constraints.Division(*self.to_pum_ivar(lhs.args), pum_rhs, constraint_tag=tag)]
                 elif lhs.name == "mul":
-                    return [constraints.Times(*self.to_pum_ivar(lhs.args, tag=tag), pum_rhs, constraint_tag=tag)]
+                    return [constraints.Times(*self.to_pum_ivar(lhs.args), pum_rhs, constraint_tag=tag)]
                 elif lhs.name == "abs":
-                    return [constraints.Absolute(self.to_pum_ivar(lhs.args[0], tag=tag), pum_rhs, constraint_tag=tag)]
+                    return [constraints.Absolute(self.to_pum_ivar(lhs.args[0]), pum_rhs, constraint_tag=tag)]
                 elif lhs.name == "min":
-                    return [constraints.Minimum(self.to_pum_ivar(lhs.args, tag=tag), pum_rhs, constraint_tag=tag)]
+                    return [constraints.Minimum(self.to_pum_ivar(lhs.args), pum_rhs, constraint_tag=tag)]
                 elif lhs.name == "max":
-                    return [constraints.Maximum(self.to_pum_ivar(lhs.args, tag=tag), pum_rhs, constraint_tag=tag)]
+                    return [constraints.Maximum(self.to_pum_ivar(lhs.args), pum_rhs, constraint_tag=tag)]
                 elif lhs.name == "element":
                     arr, idx = lhs.args
-                    return [constraints.Element(self.to_pum_ivar(idx, tag=tag),
-                                                self.to_pum_ivar(arr, tag=tag),
+                    return [constraints.Element(self.to_pum_ivar(idx),
+                                                self.to_pum_ivar(arr),
                                                 pum_rhs, constraint_tag=tag)]
                 else:
                     raise NotImplementedError("Unknown lhs of comparison", cpm_expr)
@@ -566,21 +586,21 @@ class CPM_pumpkin(SolverInterface):
 
             elif cpm_expr.name == "table":
                 arr, table = cpm_expr.args
-                return [constraints.Table(self.to_pum_ivar(arr, tag=tag), 
+                return [constraints.Table(self.to_pum_ivar(arr),
                                           np.array(table).tolist(), # ensure Python list
                                           constraint_tag=tag)
                         ]
             
             elif cpm_expr.name == "negative_table":
                 arr, table = cpm_expr.args
-                return [constraints.NegativeTable(self.to_pum_ivar(arr, tag=tag), 
+                return [constraints.NegativeTable(self.to_pum_ivar(arr),
                                                   np.array(table).tolist(),# ensure Python list
                                                   constraint_tag=tag)
                         ]
             
             elif cpm_expr.name == "InDomain":
                 val, domain = cpm_expr.args
-                return [constraints.Table(self.to_pum_ivar([val], tag=tag),
+                return [constraints.Table(self.to_pum_ivar([val]),
                                           [[d] for d in domain], # each domain value is its own row
                                           constraint_tag=tag)
                         ]
@@ -619,20 +639,29 @@ class CPM_pumpkin(SolverInterface):
 
             :return: self
         """
+        if self.pum_solver.is_inconsistent():
+            return self # cannot post any more constraints once inconsistency is reached
 
         # add new user vars to the set
         get_variables(cpm_expr_orig, collect=self.user_vars)
 
-        for cpm_expr in self.transform(cpm_expr_orig):
-            if isinstance(cpm_expr, Operator) and cpm_expr.name == "->": # found implication
-                bv, subexpr = cpm_expr.args
-                for pum_cons in self._get_constraint(subexpr):
-                    self.pum_solver.add_implication(pum_cons, self.solver_var(bv))
-            else:
-                for pum_cons in self._get_constraint(cpm_expr):
-                    self.pum_solver.add_constraint(pum_cons)
+        try:
+            for cpm_expr in self.transform(cpm_expr_orig):
+                if isinstance(cpm_expr, Operator) and cpm_expr.name == "->": # found implication
+                    bv, subexpr = cpm_expr.args
+                    for pum_cons in self._get_constraint(subexpr):
+                        self.pum_solver.add_implication(pum_cons, self.solver_var(bv))
+                else:
+                    for pum_cons in self._get_constraint(cpm_expr):
+                        self.pum_solver.add_constraint(pum_cons)
+            return self
 
-        return self
+        except RuntimeError as e:
+            # Can happen when conflict is found with just root level propagation
+            if self.pum_solver.is_inconsistent():
+                return self
+            raise e # something else happened
+
     __add__ = add # avoid redirect in superclass
 
 
@@ -659,4 +688,5 @@ class CPM_pumpkin(SolverInterface):
         :param cpm_vars: list of CPMpy variables
         :param vals: list of (corresponding) values for the variables
         """
-        self._solhint = {self.solver_var(v) : val for v, val in zip(cpm_vars, vals)} # store for later use in solve
+        if self.pum_solver.is_inconsistent() is False: # otherwise, not guaranteed all variables are known
+            self._solhint = {self.solver_var(v) : val for v, val in zip(cpm_vars, vals)} # store for later use in solve

@@ -1,5 +1,3 @@
-import unittest
-import itertools
 import cpmpy as cp
 
 
@@ -213,6 +211,3 @@ class TestCnf:
         )
         return projected_solutions
 
-
-if __name__ == "__main__":
-    unittest.main()

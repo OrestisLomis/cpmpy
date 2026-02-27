@@ -9,8 +9,6 @@ import cpmpy as cp
 from ..expressions.variables import _BoolVarImpl
 from ..expressions.core import Operator
 from ..solvers.pindakaas import CPM_pindakaas
-from cpmpy.tools.explain.marco import make_assump_model
-from cpmpy.expressions.utils import all_pairs
 
 
 def to_cnf(constraints, csemap=None, ivarmap=None, encoding="auto"):
@@ -37,7 +35,8 @@ def to_cnf(constraints, csemap=None, ivarmap=None, encoding="auto"):
 
     if ivarmap is not None:
         slv.ivarmap = ivarmap
-    slv._csemap = csemap
+    if csemap is not None:
+        slv._csemap = csemap
 
     # the encoded constraints (i.e. `PB`s) will be added to this `pdk.CNF` object
     slv.pdk_solver = pdk.CNF()
