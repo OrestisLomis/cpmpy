@@ -77,6 +77,10 @@ def to_gcnf(soft, hard=[], name=None, csemap=None, ivarmap=None, encoding="auto"
     
     start = time.time()
     cnf = to_cnf(model.constraints, encoding=encoding, csemap=csemap, ivarmap=ivarmap)
+    
+    import copy
+    cnf_return = copy.deepcopy(cnf)
+    
     end = time.time()
     print(f"c to_gcnf: converted to CNF in {end - start:.4f} seconds")
 
@@ -131,25 +135,11 @@ def to_gcnf(soft, hard=[], name=None, csemap=None, ivarmap=None, encoding="auto"
     start = time.time()
     for c in cnf:
         add_gcnf_clause(c, cl_db)
+        
     end = time.time()
     print(f"c to_gcnf: grouped clauses in {end - start:.4f} seconds")
-
-    # if normalize:
-    #     # to make groups disjoint..
-    #     for (a, g_a), (b, g_b) in all_pairs(constraints.items()):
-    #         for i, c_a in enumerate(g_a):
-    #             for j, c_b in enumerate(g_b):
-    #                 # TODO efficiency, plus account for shuffled literals
-    #                 # ..we find shared clauses between any two groups..
-    #                 if c_a == c_b:
-    #                     # ..in the second group, we replace the clause `c_b` for unit clause `f`
-    #                     f = cp.boolvar()
-    #                     g_b[j] = f
-    #                     # then add `f -> c_b` as a hard clause
-    #                     # add_gcnf_clause(f.implies(c_b))
-    #                     add_gcnf_clause([~f].extend(c_b), cl_db)
     
-    model = cp.Model(cnf)
+    model = cp.Model(cnf_return)
     softs = [cp.all(cp.any(c) for c in constraints[a]) for a in assump]
     hards = [cp.all(cp.any(c) for c in constraints[True])] if constraints[True] else []
     

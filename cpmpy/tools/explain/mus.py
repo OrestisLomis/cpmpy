@@ -526,8 +526,13 @@ def cp_mus(soft, hard=[], solver="exact", gcnf=False, clause_set_refinement=True
 
     assert hasattr(cp.SolverLookup.get(solver), "get_core"), f"mus requires a solver that supports assumption variables, use mus_naive with {solver} instead"
 
+    start_setup = time.time()
+
+    start_assump_model = time.time()
     # make assumption (indicator) variables and soft-constrained model
     (m, soft, assump) = make_assump_model(soft, hard=hard, name="mus_sel")
+    end_assump_model = time.time()
+    print(f"Assumption model creation time: {end_assump_model - start_assump_model:.4f} seconds")
         
     
     if use_symmetries:
@@ -535,8 +540,11 @@ def cp_mus(soft, hard=[], solver="exact", gcnf=False, clause_set_refinement=True
         permutations, matrices = breakid.get_generators(m.constraints, format="opb", subset=assump,pb=31, no_row=False)
         symmetries = permutations + matrices
         print(f"there are {len(symmetries)} symmetries")
-        
+    
+    start_solver_init = time.time()
     s = cp.SolverLookup.get(solver, m)
+    end_solver_init = time.time()
+    print(f"Solver initialization time: {end_solver_init - start_solver_init:.4f} seconds")
 
     # create dictionary from assump to soft
     dmap = dict(zip(assump, soft))
@@ -553,12 +561,17 @@ def cp_mus(soft, hard=[], solver="exact", gcnf=False, clause_set_refinement=True
     
     core_size = len(assump)
     
+    start_v2c = time.time()
     
     if model_rotation:
         var2constraint = {v: [] for v in get_variables_model(m)}
         for sel, c in dmap.items():
             for v in get_variables(c):
                 var2constraint[v].append(sel)
+                
+    end_v2c = time.time()
+    
+    print(f"Variable to constraint mapping time: {end_v2c - start_v2c:.4f} seconds")
     
     if not block:
         vars = get_variables_model(m)
@@ -571,6 +584,10 @@ def cp_mus(soft, hard=[], solver="exact", gcnf=False, clause_set_refinement=True
         seen, c_index, v_index = None, None, None
     
     core = set(assump)
+    
+    end_setup = time.time()
+    
+    print(f"Setup time: {end_setup - start_setup:.4f} seconds")
     
     # print(f"initial size: {len(core)}")
 

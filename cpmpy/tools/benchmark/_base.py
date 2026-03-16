@@ -70,7 +70,7 @@ from cpmpy.transformations.to_cnf import to_cnf
 from cpmpy.transformations.to_cnf import to_cnf
 
 # # --- Configuration (Define these paths outside the function, e.g., in self or module globals) ---
-path = "/home/orestis_ubuntu/work/"
+# path = "/home/orestis_ubuntu/work/"
 path = "/cw/dtailocal/orestis/"
 OUTPUT_CNF_DIR = f"{path}benchmarks/2025/PB_CNF/" 
 OUTPUT_GCNF_DIR = f"{path}benchmarks/2025/PB_GCNF/" 
@@ -702,29 +702,29 @@ class Benchmark(ABC):
             # print(f"benchname orig: {pathname}")
             # path = "/home/orestis_ubuntu/work/"
             # # path = "/cw/dtailocal/orestis/"
+            path = "/home/orestis_ubuntu/work/benchmarks/2025/new_MUS/"
             
-            # if model.has_objective() and s.status().exitstatus == ExitStatus.OPTIMAL:
-            #     for p in [0.25, 0.5, 0.75, 1]:
-            #         alt_model = cp.Model(model.constraints)
-            #         if model.objective_is_min:
-            #             alt_model += model.objective_ < int(p * model.objective_value())
-            #             alt_model.to_file(f"{path}/benchmarks/2025/ALL-XCSP-UNSAT/{basename}_{p}.pkl")
-            #         else:
-            #             alt_model += model.objective_ > int((2-p) * model.objective_value())
-            #             alt_model.to_file(f"{path}/benchmarks/2025/ALL-XCSP-UNSAT/{basename}_{2-p}.pkl")
+            if model.has_objective():
+                for p in [0.25, 0.5, 0.75, 1]:
+                    alt_model = cp.Model(model.constraints)
+                    if model.objective_is_min:
+                        alt_model += model.objective_ < int(p * model.objective_value())
+                        alt_model.to_file(f"{path}{basename}_{p}.pkl")
+                    else:
+                        alt_model += model.objective_ > int((2-p) * model.objective_value())
+                        alt_model.to_file(f"{path}{basename}_{2-p}.pkl")
                 
-            #     print(f"Saved OPTIMAL instance to {path}/benchmarks/2025/ALL-XCSP-UNSAT/{basename}_*.pkl", flush=True)
-            if s.status().exitstatus == ExitStatus.UNSATISFIABLE:
+                print(f"Saved OPTIMAL instance to {path}{basename}_*.pkl", flush=True)
+            else:
                 # copy the instance to a separate folder for unsat instances (for later use in MUS extraction etc.)
                 
-                path = "/home/orestis_ubuntu/work/benchmarks/2025/PB25-UNSAT/"
-                path = "/cw/dtailocal/orestis/benchmarks/2025/PB25-UNSAT/"
-                os.makedirs(path, exist_ok=True)
-                shutil.copy(instance_name, f"{path}{basename}")
+                # path = "/cw/dtailocal/orestis/benchmarks/2025/PB25-UNSAT/"
+                model.to_file(f"{path}{basename}.pkl")
+                # shutil.copy(instance_name, f"{path}{basename}")
                 
             #     model.to_file(f"{path}/benchmarks/2025/ALL-XCSP-UNSAT/{basename}.pkl")
                 
-            #     print(f"Saved UNSAT instance to {path}/benchmarks/2025/ALL-XCSP-UNSAT/{basename}.pkl", flush=True)
+                print(f"Saved UNSAT instance to {path}/benchmarks/2025/ALL-XCSP-UNSAT/{basename}.pkl", flush=True)
             # ------------------------------------- - ------------------------------------ #
 
             
@@ -836,7 +836,7 @@ class Benchmark(ABC):
             
             time_solve = time.time()
             try:
-                mus_res, nb_rf, nb_mr, nb_symm, sat, unsat, total_solve_time = pb_mus(model.constraints, solver=solver, time_limit=time_limit, model_rotation=False, redundancy_removal=False, assumption_removal=False, use_symmetries=False, cascade=True, init_check=False, sorting="dgs", **solver_args)
+                mus_res, nb_rf, nb_mr, nb_symm, sat, unsat, total_solve_time = pb_mus(model.constraints, solver=solver, time_limit=time_limit, model_rotation=False, redundancy_removal=False, assumption_removal=False, use_symmetries=False, init_check=False, **solver_args)
             except RuntimeError as e:
                 if "Program interrupted by user." in str(e): # Special handling for Exact
                     raise TimeoutError("Exact interrupted due to timeout")
@@ -991,7 +991,7 @@ class Benchmark(ABC):
 
             # Save CNF
             cnf_obj = CNF(from_clauses=formula)
-            cnf_obj.to_file(str(cnf_output_path))
+            # cnf_obj.to_file(str(cnf_output_path))
             
             # --- NEW PRINT FOR PB-to-CNF TIME ---
             time_pb_to_cnf = time.time() - time_pb_to_cnf

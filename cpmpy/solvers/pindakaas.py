@@ -245,6 +245,7 @@ class CPM_pindakaas(SolverInterface):
         cpm_cons = only_implies(cpm_cons, csemap=self._csemap)
         cpm_cons = linearize_constraint(cpm_cons, supported=frozenset({"sum", "wsum", "->", "and", "or"}), csemap=self._csemap)
         cpm_cons = int2bool(cpm_cons, self.ivarmap, encoding=self.encoding, csemap=self._csemap)
+        
         return cpm_cons
 
     def add(self, cpm_expr_orig):
