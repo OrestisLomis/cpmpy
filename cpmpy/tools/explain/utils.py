@@ -758,6 +758,232 @@ def rotate_model_cp(constraints, sel_var, criticals, core, var2constraint, depth
 
     return
 
+def rotate_model_cp_mcs(constraints, sel_var, criticals, core, var2constraint, last_call_time, depth=None, recursive=True, rots=None, hard=[], block=True, seen=[], c_index=None, v_index=None, eager=False, k=50):
+    import numpy as np
+    if rots is None:
+        rots = set()
+    if depth == 0:
+        return set()
+    constraint = constraints[sel_var]
+    
+    vars = get_variables(constraint)
+    
+    softs = []
+    
+    init_vals = {}
+    
+    for var in vars:
+        
+        curr_value = var.value()
+        init_vals[var] = var.value()
+        
+        softs.append(var == curr_value)
+        
+        
+    # from cpmpy.tools.explain.mcs import mcs   
+    from cpmpy.tools.explain.marco import marco 
+    # mcses = [mcs(softs, hard=constraint)]
+        
+    # print(f"{mcses=}")
+    mcses = []
+    mcs_slv = True
+    slv = True
+    start_time = time.time() 
+    s = cp.SolverLookup.get("ortools")
+    s += constraint
+    if not s.solve():
+        slv = False
+    if slv:
+        for type, mcs in marco(softs, hard=constraint, return_mus=False, return_mcs=True):
+            
+            if len(mcs) == 1:
+                mcs_slv = False
+                break
+                
+            if time.time() - start_time > last_call_time:
+                # print("Stop MCS search..")
+                break
+            else:
+                mcses.append(mcs)
+
+        if mcs_slv:
+            for mcs in mcses:
+                
+                print(mcs)
+                
+                s = cp.SolverLookup.get("ortools")
+                
+                s += constraint
+                
+                for c in softs:
+                    if c not in mcs:
+                        s += c
+                        
+                s.solve()
+                
+                
+                            
+                count = 0
+                
+                bad_rot = False # flag to avoid bad rotations
+                
+                for h in hard:
+                    if not h.value():
+                        bad_rot = True
+                        break
+                            
+                if bad_rot:
+                    continue
+                            
+                # loop over constraints in model, if only one will become false then add it to found and rotate recursively
+                affected = set()
+                
+                for v in get_vars_from_mcs(mcs):
+                    affected = affected.union(set(var2constraint[v]))
+                
+                for sel_check in affected:
+                # for sel_check, constraint_check in constraints.items():
+                    if sel_check is sel_var or sel_check not in core:
+                        continue
+                    
+                    constraint_check = constraints[sel_check]
+                    # assert constraint_check is constraints[sel_check]
+                    # print(constraint_check)
+                    
+                    if constraint_check.value() is False:
+                        count += 1
+                        last = sel_check
+                        
+                        if count > 1:
+                            # print("More than one constraint would become false, stopping rotation here")
+                            break
+                        
+                        if not eager and sel_check in criticals.union(rots):
+                            bad_rot = True
+                            break
+                        elif block and sel_check in rots:
+                            bad_rot = True
+                            break
+                    # elif not block and (seen[c_index[sel_check], v_index[var]] or np.sum(seen[c_index[sel_check], :]) >= 1):
+                    #     bad_rot = True
+                    #     break
+                    
+                    # if not block:
+                    #     seen[c_index[sel_check], v_index[var]] = True
+                                
+                if count == 1:
+                    if bad_rot:
+                        continue
+                    rots.add(last)
+                    
+                    print("succ")
+                    
+                    
+                                        
+                    if recursive:
+                        # print("Rotating model:", assoc)
+                        # print(f"flipped {lit.name} to {lit.value()}")
+                        rotate_model_cp_mcs(constraints, last, criticals, core, var2constraint, last_call_time, depth=depth-1 if depth is not None else None, block=block, rots=rots, recursive=recursive, seen=seen, c_index=c_index, v_index=v_index, k=k)
+                    
+        else:
+            
+            print("fallback")
+            
+            vars = get_variables(constraint)
+            
+            import numpy as np
+            
+            for var in vars:
+                var._value = init_vals[var]
+            
+            
+            for var in vars:
+                
+                curr_value = var.value()
+                
+                lower = var.lb
+                upper = var.ub
+                
+                
+                loop = np.arange(max(lower, curr_value-k), min(upper+1, curr_value+k+1))
+                
+                
+                for v in loop:
+                    succ_rot = False
+                    
+                    if v == curr_value:
+                        continue
+                
+                    var._value = v
+                    if constraint.value():
+                        
+                        count = 0
+                        
+                        bad_rot = False # flag to avoid bad rotations
+                        
+                        for h in hard:
+                            if not h.value():
+                                bad_rot = True
+                                break
+                        
+                        if bad_rot:
+                            continue
+                        
+                        # loop over constraints in model, if only one will become false then add it to found and rotate recursively
+                        for sel_check in var2constraint[var]:
+                        # for sel_check, constraint_check in constraints.items():
+                            if sel_check is sel_var or sel_check not in core:
+                                continue
+                            
+                            constraint_check = constraints[sel_check]
+                            # assert constraint_check is constraints[sel_check]
+                            # print(constraint_check)
+                            
+                            if constraint_check.value() is False:
+                                count += 1
+                                last = sel_check
+                                
+                                if count > 1:
+                                    # print("More than one constraint would become false, stopping rotation here")
+                                    break
+                                
+                                if not eager and sel_check in criticals:
+                                    bad_rot = True
+                                    break
+                                elif block and sel_check in rots:
+                                    bad_rot = True
+                                    break
+                                # elif not block and (seen[c_index[sel_check], v_index[var]] or np.sum(seen[c_index[sel_check], :]) >= 1):
+                                #     bad_rot = True
+                                #     break
+                                
+                                # if not block:
+                                #     seen[c_index[sel_check], v_index[var]] = True
+                                
+                        if count == 1:
+                            if bad_rot:
+                                continue
+                            rots.add(last)
+                            
+                            succ_rot = True
+                                                
+                            if recursive:
+                                # print("Rotating model:", assoc)
+                                # print(f"flipped {lit.name} to {lit.value()}")
+                                rotate_model_cp_mcs(constraints, last, criticals, core, var2constraint, last_call_time, depth=depth-1 if depth is not None else None, block=block, rots=rots, recursive=recursive, seen=seen, c_index=c_index, v_index=v_index, k=k)
+
+                                # print(f"flipped {lit.name} back to {lit.value()}")
+                            
+                            # print("Found constraint to rotate:", last)
+                            # assoc = rotate_model(model, assoc, last)
+                        
+                        if succ_rot:
+                            break
+                var._value = curr_value
+    
+
+    return
+
 def rotate_model_group(groups, group_id, depth=None, recursive=True, found=set(), hard=[]):
     group = groups[group_id]
     if len(group) > 1:
@@ -856,6 +1082,17 @@ def get_var(lit):
     else:
         assert isinstance(lit, _BoolVarImpl)
         return lit
+    
+def get_vars_from_mcs(M):
+    vars = []
+    for c in M:
+        if isinstance(c, NegBoolView):
+            vars.append(c._bv)
+        elif isinstance(c, _BoolVarImpl):
+            vars.append(c)
+        else:
+            vars.append(c.args[0])
+    return vars
 
 class OCUSException(Exception):
     pass

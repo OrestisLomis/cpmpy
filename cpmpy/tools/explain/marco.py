@@ -36,8 +36,6 @@ def marco(soft, hard=[], solver="ortools", map_solver="ortools", return_mus=True
 
     model, soft, assump = make_assump_model(soft, hard)
     
-    print(f"MARCO: created assumption model with {len(soft)} soft constraints and {len(hard)} hard constraints.")
-    print(f"model: {model}")
     dmap = dict(zip(assump, soft))
     s = cp.SolverLookup.get(solver, model)
 
@@ -55,26 +53,18 @@ def marco(soft, hard=[], solver="ortools", map_solver="ortools", return_mus=True
     while map_solver.solve():
 
         seed = [a for a in assump if a.value()]
-        
-        print(f"MARCO: seed assumptions: {seed}")
 
         if s.solve(assumptions=seed) is True:
             # SAT, grow, to full MSS
             # Assumptions encode indicator constraints a -> c, find all true assumptions
             #    and those that could just as well be made true given the current solution
             mss = [a for a,c in zip(assump, soft) if a.value() or c.value()]
-            count = 0
             for to_add in set(assump) - set(mss):
-                count += 1
-                if count % 1 == 0:
-                    print(f"  MSS growth checked {count} candidates...")
                 if s.solve(assumptions=mss + [to_add]) is True:
                     mss.append(to_add)
             
             mcs = [a for a in assump if a not in frozenset(mss)] # take complement
             map_solver += cp.any(mcs) # block in map solver
-            
-            print(f"adding MCS blocking constraint: cp.any({mcs})")
 
             if return_mcs:
                 yield "MCS", [dmap[a] for a in mcs]
@@ -82,11 +72,7 @@ def marco(soft, hard=[], solver="ortools", map_solver="ortools", return_mus=True
 
         else: # UNSAT, shrink to MUS, re-use MUSX
             core = set(s.get_core())
-            count = 0
             for c in sorted(core, key=deletion_order.get):
-                count += 1
-                if count % 1 == 0:
-                    print(f"  MUS shrink checked {count} candidates...")
                 if c not in core: # already removed
                     continue
                 core.remove(c)
@@ -96,8 +82,6 @@ def marco(soft, hard=[], solver="ortools", map_solver="ortools", return_mus=True
                     core = set(s.get_core())
 
             map_solver += ~cp.all(core) # block in map solver
-            
-            print(f"adding MUS blocking constraint: ~cp.all({core})")
 
             if return_mus:
                 yield "MUS", [dmap[a] for a in core]

@@ -27,7 +27,7 @@ from cpmpy.transformations.get_variables import get_variables
 from cpmpy.transformations.normalize import toplevel_list
 from cpmpy.transformations.to_cnf import to_gcnf
 
-from .utils import make_assump_model, replace_cons_with_assump, OCUSException
+from .utils import make_assump_model, replace_cons_with_assump, OCUSException, rotate_model_cp_mcs
 
 from .utils import get_length_gen, make_assump_model, get_slack, get_degree_over_sum, get_max_sat, get_min_sat, get_length, rotate_model, rotate_model_cp, rotate_model_old, rotate_model_group
 
@@ -686,25 +686,22 @@ def cp_mus(soft, hard=[], solver="exact", gcnf=False, clause_set_refinement=True
         total_solve_time += last_call_time
         if s.status().exitstatus == ExitStatus.FEASIBLE:
             total_sat_solve_time += last_call_time
-            # print(dmap[c])
-            # print(dmap[c].value())
-            # assert not dmap[c].value(), f"Constraint {dmap[c]} is satisfied"
-            # for sel in core:
-            #     assert sel.value()
-            #     assert dmap[sel].value()
             # TODO: check satisfiability of group, need actual group dict
             sat_calls += 1
             # hard.append(dmap[c])
             core.add(c)
             if assumption_removal:
                 s += c # permanently set to true
+                # s += dmap[c] # add constraint without assumption (not decomposed for or-tools)
+            # else:
             found.add(c) # add to found transition constraints
             if model_rotation:
 
                 found_size = len(found)
                 # print("+MR")
                 rots = set()
-                rotate_model_cp(dmap, c, found, core, var2constraint, recursive=recursive, depth=depth, rots=rots, block=block, seen=seen, c_index=c_index, v_index=v_index, eager=eager, hard=hard, k=k)
+                rotate_model_cp_mcs(dmap, c, found, core, var2constraint, last_call_time, recursive=recursive, depth=depth, rots=rots, block=block, seen=seen, c_index=c_index, v_index=v_index, eager=eager, hard=hard, k=k)
+                # rotate_model_cp_iterative(dmap, c, found, core, var2constraint, rots=rots, block=block, seen=seen, c_index=c_index, v_index=v_index, eager=eager, hard=hard, k=k)
                 # print("-MR")
                 # print(f"Model rotation found {len(found) - found_size} new transition constraints")
                 new_found = rots.difference(found)
@@ -733,7 +730,8 @@ def cp_mus(soft, hard=[], solver="exact", gcnf=False, clause_set_refinement=True
         elif s.status().exitstatus == ExitStatus.UNSATISFIABLE: # UNSAT, use new solver core (clause set refinement)
             unsat_calls += 1
             if clause_set_refinement:
-                new_core = set(s.get_core()).union(found)
+                # new_core = set(s.get_core()).union(found)
+                new_core = set(s.get_core())
                 if redundancy_removal:
                     # s += ~red_var # remove red constraint
                     if red_var in new_core:
@@ -754,7 +752,7 @@ def cp_mus(soft, hard=[], solver="exact", gcnf=False, clause_set_refinement=True
     # print(f"Total solve time: {total_solve_time}")
     if assertions:
         
-        assert len(mus([dmap[c] for c in found], hard=hard, solver=solver)[0]) == len(found), "MUS: final core is not a MUS"
+        assert len(mus([dmap[c] for c in found], hard=hard, solver=solver)) == len(found), "MUS: final core is not a MUS"
 
     
     return found, nb_removed_refinement, nb_found_mr, nb_found_symm, sat_calls, unsat_calls, total_solve_time

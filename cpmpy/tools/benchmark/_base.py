@@ -70,7 +70,7 @@ from cpmpy.transformations.to_cnf import to_cnf
 from cpmpy.transformations.to_cnf import to_cnf
 
 # # --- Configuration (Define these paths outside the function, e.g., in self or module globals) ---
-# path = "/home/orestis_ubuntu/work/"
+path = "/home/orestis_ubuntu/work/"
 path = "/cw/dtailocal/orestis/"
 OUTPUT_CNF_DIR = f"{path}benchmarks/2025/PB_CNF/" 
 OUTPUT_GCNF_DIR = f"{path}benchmarks/2025/PB_GCNF/" 
@@ -635,99 +635,91 @@ class Benchmark(ABC):
             time_parse = time.time()
             model = self.read_instance(instance, open=open)
             
-            # model.objective_ = None
-            time_parse = time.time() - time_parse
+            if not model.has_objective():
             
-            # model, _, assumps = make_assump_model(model.constraints)
-            
-            # print(f"model: {model}", flush=True)
-            if verbose: self.print_comment(f"took {time_parse:.4f} seconds to parse model")
-
-            if time_limit and time_limit < _wall_time(p):
-                raise TimeoutError("Time's up after parse")
-            
-            # ------------------------ Post CPMpy model to solver ------------------------ #
-
-            solver_args, internal_options = self.solver_arguments(solver, model=model, seed=seed,
-                                        intermediate=intermediate,
-                                        cores=cores, mem_limit=_mib_as_bytes(mem_limit) if mem_limit is not None else None,
-                                        **kwargs)
-            
-
-            # Post model to solver
-            time_post = time.time()
-            s = self.post_model(model, solver, solver_args)
-            time_post = time.time() - time_post
-            if verbose: self.print_comment(f"took {time_post:.4f} seconds to post model to {solver}")
-            
-            if time_limit and time_limit < _wall_time(p):
-                raise TimeoutError("Time's up after post")
-            
-            # ------------------------------- Solve model ------------------------------- #
-            
-            if time_limit:
-                # give solver only the remaining time
-                time_limit = time_limit - _wall_time(p) - time_buffer
-                # disable signal-based time limit and let the solver handle it (solvers don't play well with difference between cpu and wall time)
-                self.set_time_limit(None)
+                # model.objective_ = None
+                time_parse = time.time() - time_parse
                 
-                if verbose: self.print_comment(f"{time_limit}s left to solve")
-            
-            time_solve = time.time()
-            try:
-                if internal_options is not None:
-                    internal_options(s) # Set more internal solver options (need access to native solver object)
-                # is_sat = s.solve(time_limit=time_limit, assumptions=assumps, **solver_args)
-                print(f"Solving with solver {solver}...", flush=True)
-                if solver == "pysat:Cadical195":
-                    is_sat = s.solve(**solver_args)
-                else:
-                    is_sat = s.solve(time_limit=time_limit, **solver_args)
-            except RuntimeError as e:
-                if "Program interrupted by user." in str(e): # Special handling for Exact
-                    raise TimeoutError("Exact interrupted due to timeout")
-                else:
-                    raise e
+                # model, _, assumps = make_assump_model(model.constraints)
+                
+                # print(f"model: {model}", flush=True)
+                if verbose: self.print_comment(f"took {time_parse:.4f} seconds to parse model")
 
-            time_solve = time.time() - time_solve
-            if verbose: self.print_comment(f"took {time_solve:.4f} seconds to solve")
+                if time_limit and time_limit < _wall_time(p):
+                    raise TimeoutError("Time's up after parse")
+                
+                # ------------------------ Post CPMpy model to solver ------------------------ #
 
-            # ------------------------------- Print result ------------------------------- #
+                solver_args, internal_options = self.solver_arguments(solver, model=model, seed=seed,
+                                            intermediate=intermediate,
+                                            cores=cores, mem_limit=_mib_as_bytes(mem_limit) if mem_limit is not None else None,
+                                            **kwargs)
+                
 
-            self.print_result(s)
-
-            from cpmpy.solvers.solver_interface import ExitStatus
-            basename = os.path.basename(instance_name)
-            # pathname = os.path.dirname(instance_name)
-            # print(f"benchname orig: {pathname}")
-            # path = "/home/orestis_ubuntu/work/"
-            # # path = "/cw/dtailocal/orestis/"
-            path = "/home/orestis_ubuntu/work/benchmarks/2025/new_MUS/"
-            
-            if model.has_objective():
-                for p in [0.25, 0.5, 0.75, 1]:
-                    alt_model = cp.Model(model.constraints)
-                    if model.objective_is_min:
-                        alt_model += model.objective_ < int(p * model.objective_value())
-                        alt_model.to_file(f"{path}{basename}_{p}.pkl")
+                # Post model to solver
+                time_post = time.time()
+                s = self.post_model(model, solver, solver_args)
+                time_post = time.time() - time_post
+                if verbose: self.print_comment(f"took {time_post:.4f} seconds to post model to {solver}")
+                
+                if time_limit and time_limit < _wall_time(p):
+                    raise TimeoutError("Time's up after post")
+                
+                # ------------------------------- Solve model ------------------------------- #
+                
+                if time_limit:
+                    # give solver only the remaining time
+                    time_limit = time_limit - _wall_time(p) - time_buffer
+                    # disable signal-based time limit and let the solver handle it (solvers don't play well with difference between cpu and wall time)
+                    self.set_time_limit(None)
+                    
+                    if verbose: self.print_comment(f"{time_limit}s left to solve")
+                
+                time_solve = time.time()
+                try:
+                    if internal_options is not None:
+                        internal_options(s) # Set more internal solver options (need access to native solver object)
+                    # is_sat = s.solve(time_limit=time_limit, assumptions=assumps, **solver_args)
+                    print(f"Solving with solver {solver}...", flush=True)
+                    if solver == "pysat:Cadical195":
+                        is_sat = s.solve(**solver_args)
                     else:
-                        alt_model += model.objective_ > int((2-p) * model.objective_value())
-                        alt_model.to_file(f"{path}{basename}_{2-p}.pkl")
-                
-                print(f"Saved OPTIMAL instance to {path}{basename}_*.pkl", flush=True)
-            else:
-                # copy the instance to a separate folder for unsat instances (for later use in MUS extraction etc.)
-                
-                # path = "/cw/dtailocal/orestis/benchmarks/2025/PB25-UNSAT/"
-                model.to_file(f"{path}{basename}.pkl")
-                # shutil.copy(instance_name, f"{path}{basename}")
-                
-            #     model.to_file(f"{path}/benchmarks/2025/ALL-XCSP-UNSAT/{basename}.pkl")
-                
-                print(f"Saved UNSAT instance to {path}/benchmarks/2025/ALL-XCSP-UNSAT/{basename}.pkl", flush=True)
-            # ------------------------------------- - ------------------------------------ #
+                        is_sat = s.solve(time_limit=time_limit, **solver_args)
+                except RuntimeError as e:
+                    if "Program interrupted by user." in str(e): # Special handling for Exact
+                        raise TimeoutError("Exact interrupted due to timeout")
+                    else:
+                        raise e
 
-            
+                time_solve = time.time() - time_solve
+                if verbose: self.print_comment(f"took {time_solve:.4f} seconds to solve")
+
+                # ------------------------------- Print result ------------------------------- #
+
+                # self.print_result(s)
+
+                from cpmpy.solvers.solver_interface import ExitStatus
+                basename = os.path.basename(instance_name)
+                # pathname = os.path.dirname(instance_name)
+                # print(f"benchname orig: {pathname}")
+                # path = "/home/orestis_ubuntu/work/"
+                
+                if s.status().exitstatus == ExitStatus.UNSATISFIABLE:
+                    path = "/cw/dtailocal/orestis/benchmarks/2025/new_MUS/"
+                    # path = "/home/orestis_ubuntu/work/benchmarks/2025/new_MUS/"
+                    
+                        # copy the instance to a separate folder for unsat instances (for later use in MUS extraction etc.)
+                        
+                        # path = "/cw/dtailocal/orestis/benchmarks/2025/PB25-UNSAT/"
+                    model.to_file(f"{path}{basename}.pkl")
+                    # shutil.copy(instance_name, f"{path}{basename}")
+                    
+                #     model.to_file(f"{path}/benchmarks/2025/ALL-XCSP-UNSAT/{basename}.pkl")
+                    
+                    print(f"Saved UNSAT instance to {path}{basename}.pkl", flush=True)
+                # ------------------------------------- - ------------------------------------ #
+
+                
         except MemoryError as e:
             disable_memory_limit()
             self.handle_memory_error(mem_limit)

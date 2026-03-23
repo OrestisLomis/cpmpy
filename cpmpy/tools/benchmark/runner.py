@@ -98,8 +98,8 @@ def wrapper(instance_runner, conn, kwargs, verbose):
     try:
         kwargs["verbose"] = verbose
         print(f"running instance: {kwargs.get('instance_name', 'unknown')} with solver: {kwargs.get('solver', 'default')} on PID {os.getpid()}", flush=True)
-        # instance_runner.run(**kwargs)
-        instance_runner.run_mus(**kwargs)
+        instance_runner.run(**kwargs)
+        # instance_runner.run_mus(**kwargs)
         # instance_runner.run_conv(**kwargs)
         print(f"finished instance: {kwargs.get('instance_name', 'unknown')}", flush=True)
         # instance_runner.run_conv_cp(**kwargs)
@@ -144,7 +144,7 @@ def execute_instance(args: Tuple[callable, str, dict, callable, str, int, int, i
                   'time_total', 'time_parse', 'time_model', 'time_post', 'time_solve',
                   'status', 'objective_value', 'solution', 'intermediate', 'checker_result']
     # other fieldnames for MUS
-    fieldnames = list(metadata.keys()) + ['solver', 'time_total', 'time_parse', 'time_solve', 'mus_size', 'refinement', 'rotation', 'symmetry', 'sat_calls', 'unsat_calls', 'solver_calls', 'total_solve_only', 'solution', 'status']
+    # fieldnames = list(metadata.keys()) + ['solver', 'time_total', 'time_parse', 'time_solve', 'mus_size', 'refinement', 'rotation', 'symmetry', 'sat_calls', 'unsat_calls', 'solver_calls', 'total_solve_only', 'solution', 'status']
     # fieldnames= list(metadata.keys()) + ['solver', 'time_total', 'time_parse', 'time_pb_to_cnf', 'time_model', 'time_cnf_to_gcnf', 'time_solve', 'solution', 'status']
     result = dict.fromkeys(fieldnames)  # init all fields to None
     for k in metadata.keys():
@@ -225,8 +225,8 @@ def execute_instance(args: Tuple[callable, str, dict, callable, str, int, int, i
             
     else:
         # TODO: only do when running MUS 
-        # pass
-        result['solver_calls'] = result['sat_calls'] + result['unsat_calls']
+        pass
+        # result['solver_calls'] = result['sat_calls'] + result['unsat_calls']
 
     # if checker_path is not None and complete_solution is not None: TODO: generalise 'checkers' for benchmarks
     #     checker_output, checker_time = run_solution_checker(
