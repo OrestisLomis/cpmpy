@@ -50,7 +50,7 @@ General comparisons or expressions
 """
 import copy
 import warnings
-from typing import Set, Sequence, Optional
+from typing import Set, AbstractSet, Sequence, Optional
 
 import numpy as np
 import cpmpy as cp
@@ -135,26 +135,27 @@ def linearize_constraint(lst_of_expr, supported={"sum","wsum","->"}, reified=Fal
                         else: # need to linearize the implication constraint itself
                             # either -> is not supported, or we are in a reified context (nested -> constraints are not linear)
                             assert isinstance(lin, Comparison), f"Expected a comparison as rhs of implication constraint, got {lin}"
-                            if lin.args[0].name not in {"sum", "wsum"}:
-                                assert lin.args[0].name in supported, f"Unexpected rhs of implication: {lin}, it is not supported ({supported})"
+                            lin_lhs, lin_rhs = lin.args
+                            if lin_lhs.name not in {"sum", "wsum"}:
+                                assert lin_lhs.name in supported, f"Unexpected lhs of rhs of implication: {cpm_expr}, it is not supported ({supported})"
                                 indicator_constraints.append(cond.implies(lin))
                                 continue
 
                             # need to write as big-M
-                            assert lin.args[0].name in frozenset({'sum', 'wsum'}), f"Expected sum or wsum as rhs of implication constraint, but got {lin}"
-                            assert is_num(lin.args[1])
-                            lb, ub = get_bounds(lin.args[0])
+                            assert lin_lhs.name in frozenset({'sum', 'wsum'}), f"Expected sum or wsum as lhs of rhs of implication constraint, but got {lin_lhs}"
+                            assert is_num(lin_rhs)
+                            lb, ub = get_bounds(lin_lhs)
                             if lin.name == "<=":
-                                M = lin.args[1] - ub # subtracting M from lhs will always satisfy the implied constraint
-                                lin.args[0] += M * ~cond
-                                indicator_constraints.append(lin)
+                                M = lin_rhs - ub # subtracting M from lhs will always satisfy the implied constraint
+                                lin_lhs += M * ~cond
+                                indicator_constraints.append(Comparison(lin.name, lin_lhs, lin_rhs))
                             elif lin.name == ">=":
-                                M = lin.args[1] - lb # adding M to lhs will always satisfy the implied constraint
-                                lin.args[0] += M * ~cond
-                                indicator_constraints.append(lin)
+                                M = lin_rhs - lb # adding M to lhs will always satisfy the implied constraint
+                                lin_lhs += M * ~cond
+                                indicator_constraints.append(Comparison(lin.name, lin_lhs, lin_rhs))
                             elif lin.name == "==":
-                                indicator_constraints += linearize_constraint([cond.implies(lin.args[0] <= lin.args[1]),
-                                                                               cond.implies(lin.args[0] >= lin.args[1])],
+                                indicator_constraints += linearize_constraint([cond.implies(lin_lhs <= lin_rhs),
+                                                                               cond.implies(lin_lhs >= lin_rhs)],
                                                                               supported=supported, reified=reified, csemap=csemap)
                             else:
                                 raise ValueError(f"Unexpected linearized rhs of implication {lin} in {cpm_expr}")
@@ -560,9 +561,9 @@ def only_positive_coefficients(lst_of_expr):
 
 
 def decompose_linear(lst_of_expr: Sequence[Expression],
-                     supported: Set[str]=frozenset(),
-                     supported_reified:Set[str]=frozenset(),
-                     csemap:Optional[dict[Expression,Expression]]=None):
+                     supported: Optional[AbstractSet[str]] = None,
+                     supported_reified: Optional[AbstractSet[str]] = None,
+                     csemap: Optional[dict[Expression, Expression]] = None):
     """
         Decompose unsupported global constraints in a linear-friendly way using (var == val) in sums.
 
@@ -575,18 +576,28 @@ def decompose_linear(lst_of_expr: Sequence[Expression],
         returns:
             list of expressions
     """
+    if supported is None:
+        supported = frozenset[str]()
+    if supported_reified is None:
+        supported_reified = frozenset[str]()
+
     decompose_custom = get_linear_decompositions()
 
-    return decompose_in_tree(lst_of_expr, supported, supported_reified, csemap=csemap, decompose_custom=decompose_custom)
+    return decompose_in_tree(list(lst_of_expr), supported=supported, supported_reified=supported_reified, csemap=csemap, decompose_custom=decompose_custom)
 
-def decompose_linear_objective(obj: Sequence[Expression],
-                               supported: Set[str] = frozenset(),
-                               supported_reified: Set[str] = frozenset(),
+def decompose_linear_objective(obj: Expression,
+                               supported: Optional[AbstractSet[str]] = None,
+                               supported_reified: Optional[AbstractSet[str]] = None,
                                csemap: Optional[dict[Expression, Expression]] = None):
     """Decompose objective using linear-friendly (var == val) decompositions."""
+    if supported is None:
+        supported = frozenset[str]()
+    if supported_reified is None:
+        supported_reified = frozenset[str]()
+
     decompose_custom = get_linear_decompositions()
 
-    return decompose_objective(obj, supported, supported_reified, csemap=csemap, decompose_custom=decompose_custom)
+    return decompose_objective(obj, supported=supported, supported_reified=supported_reified, csemap=csemap, decompose_custom=decompose_custom)
 
 def get_linear_decompositions():
     """
@@ -640,10 +651,10 @@ def linearize_reified_variables(constraints, min_values=3, csemap=None, ivarmap=
             continue  # do not encode
 
         # encode the values
-        enc, _ = _encode_int_var(my_ivarmap, var, "direct", csemap=csemap)
+        enc, domain_constraint = _encode_int_var(my_ivarmap, var, "direct", csemap=csemap)
         
         # domain and channeling constraints
-        toplevel.extend(enc.encode_domain_constraint()) # with the overwritten Bools
+        toplevel.extend(domain_constraint) # with the overwritten Bools
         if ivarmap is None:
             # also post the var=wsum mapping
             terms, k = enc.encode_term()
