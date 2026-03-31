@@ -191,7 +191,7 @@ def pb_mus(soft, hard=[], solver="exact", clause_set_refinement=True, init_check
         if len(solve_times) >= 20:
             avg = sum(solve_times) / len(solve_times)
             max_t = max(solve_times)
-            print(f"[Batch Update] Last 50 calls: Avg {avg:.4f}s, Max {max_t:.4f}s | Core size: {len(core)} | found in MUS so far: {len(found)}")
+            print(f"[Batch Update] Last 20 calls: Avg {avg:.4f}s, Max {max_t:.4f}s | Core size: {len(core)} | found in MUS so far: {len(found)}")
             solve_times = [] # Reset
             
         # print(last_call_time)
@@ -561,17 +561,17 @@ def cp_mus(soft, hard=[], solver="exact", gcnf=False, clause_set_refinement=True
     
     core_size = len(assump)
     
-    start_v2c = time.time()
     
     if model_rotation:
+        start_v2c = time.time()
         var2constraint = {v: [] for v in get_variables_model(m)}
         for sel, c in dmap.items():
             for v in get_variables(c):
                 var2constraint[v].append(sel)
                 
-    end_v2c = time.time()
-    
-    print(f"Variable to constraint mapping time: {end_v2c - start_v2c:.4f} seconds")
+        end_v2c = time.time()
+        
+        print(f"Variable to constraint mapping time: {end_v2c - start_v2c:.4f} seconds")
     
     if not block:
         vars = get_variables_model(m)
@@ -607,9 +607,10 @@ def cp_mus(soft, hard=[], solver="exact", gcnf=False, clause_set_refinement=True
             if elapsed >= time_limit:
                 raise TimeoutError("Time's up during initial solve")
             total_solve_time += elapsed
-        # print(f"Initial UNSAT check done in {time.time() - start} sec.")
+        print(f"Initial UNSAT check done in {time.time() - start} sec.")
         unsat_calls += 1
         new_core = set(s.get_core())  # start from solver's UNSAT core
+        print(f"new core size: {len(new_core)}")
         
         if assumption_removal:
             newly_removed = core - new_core
@@ -695,12 +696,13 @@ def cp_mus(soft, hard=[], solver="exact", gcnf=False, clause_set_refinement=True
                 # s += dmap[c] # add constraint without assumption (not decomposed for or-tools)
             # else:
             found.add(c) # add to found transition constraints
-            if model_rotation:
+            if model_rotation and len(found) <= len(core):
 
                 found_size = len(found)
                 # print("+MR")
-                rots = set()
-                rotate_model_cp_mcs(dmap, c, found, core, var2constraint, last_call_time, recursive=recursive, depth=depth, rots=rots, block=block, seen=seen, c_index=c_index, v_index=v_index, eager=eager, hard=hard, k=k)
+                rots = {c,}
+                rotate_model_cp(dmap, c, found, core, var2constraint, recursive=recursive, depth=depth, rots=rots, block=block, seen=seen, c_index=c_index, v_index=v_index, eager=eager, hard=hard, k=k)
+                # rotate_model_cp_mcs(dmap, c, found, core, var2constraint, last_call_time, recursive=recursive, depth=depth, rots=rots, block=block, seen=seen, c_index=c_index, v_index=v_index, eager=eager, hard=hard, k=k)
                 # rotate_model_cp_iterative(dmap, c, found, core, var2constraint, rots=rots, block=block, seen=seen, c_index=c_index, v_index=v_index, eager=eager, hard=hard, k=k)
                 # print("-MR")
                 # print(f"Model rotation found {len(found) - found_size} new transition constraints")
@@ -1118,7 +1120,7 @@ def mus_iis(soft, hard=[], solver="gurobi"):
     assert solver == "gurobi", f"Only Gurobi supported as IIS solver, but was given {solver}"
 
     # Create assumption variables and model with hard + (assumption -> soft)
-    m, soft, assumptions = make_assump_model(soft, hard)
+    m, soft, assumptions = make_assump_model(soft, hard, name="mus_sel")
 
     # Instantiate solver (will check if solver is installed and licensed)
     s = cp.SolverLookup.get(solver, m)
@@ -1145,4 +1147,5 @@ def mus_iis(soft, hard=[], solver="gurobi"):
 
     # Find which assumption is in the IIS/MUS
     return [soft for soft, grb_assumption in zip(soft, grb_assumptions) if grb_assumption.IISConstr]
+    # return [assump for assump, grb_assumption in zip(assumptions, grb_assumptions) if grb_assumption.IISConstr]
 

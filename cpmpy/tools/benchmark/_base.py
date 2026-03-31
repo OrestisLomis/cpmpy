@@ -52,7 +52,7 @@ from cpmpy.expressions.core import Comparison, Operator
 from cpmpy.expressions.variables import _BoolVarImpl, NegBoolView
 from cpmpy.expressions.variables import _BoolVarImpl
 from cpmpy.tools.dimacs_ import write_gcnf
-from cpmpy.tools.explain.mus import make_assump_model
+from cpmpy.tools.explain.mus import make_assump_model, mus_iis
 from cpmpy.solvers.pysat import CPM_pysat
 from pysat.formula import CNF
 
@@ -828,7 +828,8 @@ class Benchmark(ABC):
             
             time_solve = time.time()
             try:
-                mus_res, nb_rf, nb_mr, nb_symm, sat, unsat, total_solve_time = pb_mus(model.constraints, solver=solver, time_limit=time_limit, model_rotation=False, redundancy_removal=False, assumption_removal=False, use_symmetries=False, init_check=False, **solver_args)
+                mus_res, nb_rf, nb_mr, nb_symm, sat, unsat, total_solve_time = pb_mus(model.constraints, solver=solver, time_limit=time_limit, model_rotation=True, redundancy_removal=False, assumption_removal=False, use_symmetries=False, init_check=False, eager=True, **solver_args)
+                # mus_res = mus_iis(model.constraints, solver="gurobi")
             except RuntimeError as e:
                 if "Program interrupted by user." in str(e): # Special handling for Exact
                     raise TimeoutError("Exact interrupted due to timeout")

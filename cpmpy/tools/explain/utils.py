@@ -25,7 +25,7 @@ import copy
 import cpmpy as cp
 from cpmpy.transformations.get_variables import get_variables
 from cpmpy.expressions.utils import is_any_list
-from cpmpy.expressions.variables import _BoolVarImpl, NegBoolView
+from cpmpy.expressions.variables import _BoolVarImpl, NegBoolView, cpm_array
 from cpmpy.transformations.normalize import toplevel_list
 import time
 
@@ -674,14 +674,36 @@ def rotate_model_cp(constraints, sel_var, criticals, core, var2constraint, depth
     
     for var in vars:
         
-        curr_value = var.value()
+        curr_value = int(var.value())
+        lower = int(var.lb)
+        upper = int(var.ub)
+
+        # 1. Define the "Inner Radius" (All values within distance k)
+        # This is your original 'loop' logic
+        inner_lower = max(lower, curr_value - k)
+        inner_upper = min(upper, curr_value + k)
+        inner_radius = np.arange(inner_lower, inner_upper + 1)
+
+        # # 2. Define the "Outer Domain" (Everything else)
+        # full_domain = np.arange(lower, upper + 1)
+        # mask = (full_domain < inner_lower) | (full_domain > inner_upper)
+        # outer_domain = full_domain[mask]
+
+        # # 3. Sample from the Outer Domain
+        # if len(outer_domain) > 0:
+        #     sample_size = min(len(outer_domain), k)
+        #     random_samples = np.random.choice(outer_domain, size=sample_size, replace=False)
+        # else:
+        #     random_samples = np.array([], dtype=np.int64)
+        # # random_samples = np.array([])
+
+        # # 4. Combine them
+        # # This includes the entire neighborhood AND k random points from outside
+        # loop = np.concatenate([inner_radius, random_samples])
         
-        lower = var.lb
-        upper = var.ub
+        loop = inner_radius
         
-        
-        loop = np.arange(max(lower, curr_value-k), min(upper+1, curr_value+k+1))
-        
+        # print(loop)
         
         for v in loop:
             succ_rot = False
@@ -779,6 +801,9 @@ def rotate_model_cp_mcs(constraints, sel_var, criticals, core, var2constraint, l
         
         softs.append(var == curr_value)
         
+    vars = cpm_array(vars)
+    # print(f"{vars.value()=}")
+        
         
     # from cpmpy.tools.explain.mcs import mcs   
     from cpmpy.tools.explain.marco import marco 
@@ -808,8 +833,8 @@ def rotate_model_cp_mcs(constraints, sel_var, criticals, core, var2constraint, l
 
         if mcs_slv:
             for mcs in mcses:
-                
-                print(mcs)
+                # print(f"{constraint=}")
+                # print(mcs)
                 
                 s = cp.SolverLookup.get("ortools")
                 
@@ -818,76 +843,82 @@ def rotate_model_cp_mcs(constraints, sel_var, criticals, core, var2constraint, l
                 for c in softs:
                     if c not in mcs:
                         s += c
-                        
-                s.solve()
                 
                 
-                            
-                count = 0
-                
-                bad_rot = False # flag to avoid bad rotations
-                
-                for h in hard:
-                    if not h.value():
-                        bad_rot = True
-                        break
-                            
-                if bad_rot:
-                    continue
-                            
-                # loop over constraints in model, if only one will become false then add it to found and rotate recursively
-                affected = set()
-                
-                for v in get_vars_from_mcs(mcs):
-                    affected = affected.union(set(var2constraint[v]))
-                
-                for sel_check in affected:
-                # for sel_check, constraint_check in constraints.items():
-                    if sel_check is sel_var or sel_check not in core:
-                        continue
+                def check_MR(constraints, sel_var, criticals, core, var2constraint, depth, recursive, rots, hard, block, seen, c_index, v_index, eager, k, mcs):
+                    # print(vars.value())
+                    count = 0
                     
-                    constraint_check = constraints[sel_check]
-                    # assert constraint_check is constraints[sel_check]
-                    # print(constraint_check)
+                    bad_rot = False # flag to avoid bad rotations
                     
-                    if constraint_check.value() is False:
-                        count += 1
-                        last = sel_check
-                        
-                        if count > 1:
-                            # print("More than one constraint would become false, stopping rotation here")
-                            break
-                        
-                        if not eager and sel_check in criticals.union(rots):
+                    for h in hard:
+                        if not h.value():
                             bad_rot = True
                             break
-                        elif block and sel_check in rots:
-                            bad_rot = True
-                            break
-                    # elif not block and (seen[c_index[sel_check], v_index[var]] or np.sum(seen[c_index[sel_check], :]) >= 1):
-                    #     bad_rot = True
-                    #     break
-                    
-                    # if not block:
-                    #     seen[c_index[sel_check], v_index[var]] = True
                                 
-                if count == 1:
                     if bad_rot:
-                        continue
-                    rots.add(last)
+                        # print("bad rot 1")
+                        return
+                                
+                    # loop over constraints in model, if only one will become false then add it to found and rotate recursively
+                    affected = set()
                     
-                    print("succ")
+                    for v in get_vars_from_mcs(mcs):
+                        affected = affected.union(set(var2constraint[v]))
                     
+                    for sel_check in affected:
+                    # for sel_check, constraint_check in constraints.items():
+                        if sel_check is sel_var or sel_check not in core:
+                            continue
+                        
+                        constraint_check = constraints[sel_check]
+                        # assert constraint_check is constraints[sel_check]
+                        # print(constraint_check)
+                        
+                        if constraint_check.value() is False:
+                            count += 1
+                            last = sel_check
+                            
+                            if count > 1:
+                                # print("More than one constraint would become false, stopping rotation here")
+                                break
+                            
+                            if not eager and sel_check in criticals.union(rots):
+                                bad_rot = True
+                                break
+                            elif block and sel_check in rots:
+                                bad_rot = True
+                                # print("blocked cons")
+                                break
+                        # elif not block and (seen[c_index[sel_check], v_index[var]] or np.sum(seen[c_index[sel_check], :]) >= 1):
+                        #     bad_rot = True
+                        #     break
+                        
+                        # if not block:
+                        #     seen[c_index[sel_check], v_index[var]] = True
+                                    
+                    if count == 1:
+                        if bad_rot:
+                            return
+                        rots.add(last)
+                        
+                        
+                                            
+                        if recursive:
+                            # print("Rotating model:", assoc)
+                            # print(f"flipped {lit.name} to {lit.value()}")
+                            rotate_model_cp_mcs(constraints, last, criticals, core, var2constraint, last_call_time, depth=depth-1 if depth is not None else None, block=block, rots=rots, recursive=recursive, seen=seen, c_index=c_index, v_index=v_index, k=k)
+                        
+                        
                     
-                                        
-                    if recursive:
-                        # print("Rotating model:", assoc)
-                        # print(f"flipped {lit.name} to {lit.value()}")
-                        rotate_model_cp_mcs(constraints, last, criticals, core, var2constraint, last_call_time, depth=depth-1 if depth is not None else None, block=block, rots=rots, recursive=recursive, seen=seen, c_index=c_index, v_index=v_index, k=k)
+                    # solutions.append(list(vars.value()))
+                    # s.maximize(sum([sum(vars != sol) for sol in solutions]))
                     
+                s.solveAll(display=lambda: check_MR(constraints, sel_var, criticals, core, var2constraint, depth, recursive, rots, hard, block, seen, c_index, v_index, eager, k, mcs), solution_limit=k)     
+                
+                
+                            
         else:
-            
-            print("fallback")
             
             vars = get_variables(constraint)
             
@@ -899,13 +930,32 @@ def rotate_model_cp_mcs(constraints, sel_var, criticals, core, var2constraint, l
             
             for var in vars:
                 
-                curr_value = var.value()
-                
-                lower = var.lb
-                upper = var.ub
-                
-                
-                loop = np.arange(max(lower, curr_value-k), min(upper+1, curr_value+k+1))
+                curr_value = int(var.value())
+                lower = int(var.lb)
+                upper = int(var.ub)
+
+                # 1. Define the "Inner Radius" (All values within distance k)
+                # This is your original 'loop' logic
+                inner_lower = max(lower, curr_value - k)
+                inner_upper = min(upper, curr_value + k)
+                inner_radius = np.arange(inner_lower, inner_upper + 1)
+
+                # 2. Define the "Outer Domain" (Everything else)
+                full_domain = np.arange(lower, upper + 1)
+                mask = (full_domain < inner_lower) | (full_domain > inner_upper)
+                outer_domain = full_domain[mask]
+
+                # 3. Sample from the Outer Domain
+                if len(outer_domain) > 0:
+                    sample_size = min(len(outer_domain), k)
+                    random_samples = np.random.choice(outer_domain, size=sample_size, replace=False)
+                else:
+                    random_samples = np.array([], dtype=np.int64)
+                # random_samples = np.array([])
+
+                # 4. Combine them
+                # This includes the entire neighborhood AND k random points from outside
+                loop = np.concatenate([inner_radius, random_samples])
                 
                 
                 for v in loop:
