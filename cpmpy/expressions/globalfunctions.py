@@ -73,14 +73,14 @@
 
 """
 import warnings  # for deprecation warning
-from typing import Optional
+from typing import Optional, Iterable
 import numpy as np
 import cpmpy as cp
 
 from ..exceptions import CPMpyException, IncompleteFunctionError, TypeError
 from .core import Expression, Operator, ExprLike, ListLike
-from .variables import boolvar, intvar, cpm_array
-from .utils import flatlist, argval, is_num, is_int, eval_comparison, is_any_list, is_boolexpr, get_bounds, argvals, implies
+from .variables import intvar, NDVarArray, _NumVarImpl, BoolVal
+from .utils import argval, is_num, eval_comparison, is_any_list, is_boolexpr, get_bounds, argvals, implies, argvals_intexpr, get_bounds_intexpr, npint2int
 
 
 class GlobalFunction(Expression):
@@ -162,18 +162,32 @@ class Minimum(GlobalFunction):
         Arguments:
             arg_list (ListLike[ExprLike]): List of expressions or constants of which to compute the minimum
         """
-        super().__init__("min", flatlist(arg_list))
+        has_subexpr: Optional[bool] = None
+
+        arg_iter: Iterable[ExprLike] = arg_list
+        if isinstance(arg_list, np.ndarray):
+            if isinstance(arg_list, NDVarArray):
+                has_subexpr = arg_list.has_subexpr()
+            arg_iter = arg_list.flat
+
+        # convert numpy integers to Python integers
+        args: tuple[int|Expression, ...] = npint2int(arg_iter)
+        super().__init__("min", args, has_subexpr=has_subexpr)
+    
+    @property
+    def args(self) -> tuple[int|Expression, ...]:
+        """ READ-ONLY, well-typed argument of this global function, no numpy ints"""
+        return self._args
 
     def value(self) -> Optional[int]:
         """
         Returns:
             Optional[int]: The minimum value of the arguments, or None if any argument is not assigned
         """
-        vargs = [argval(a) for a in self.args]
-        if any(val is None for val in vargs):
+        vals = argvals_intexpr(self.args)
+        if vals is None:
             return None
-
-        return min(vargs)
+        return min(vals)
 
     def decompose(self) -> tuple[Expression, list[Expression]]:
         """
@@ -196,8 +210,8 @@ class Minimum(GlobalFunction):
         Returns:
             tuple[int, int]: A tuple of (lower bound, upper bound) for the minimum value
         """
-        bnds = [get_bounds(x) for x in self.args]
-        return min(lb for lb, ub in bnds), min(ub for lb, ub in bnds)
+        lbs, ubs = get_bounds_intexpr(self.args)
+        return min(lbs), min(ubs)
 
 
 class Maximum(GlobalFunction):
@@ -210,18 +224,33 @@ class Maximum(GlobalFunction):
         Arguments:
             arg_list (ListLike[ExprLike]): List of expressions or constants of which to compute the maximum
         """
-        super().__init__("max", flatlist(arg_list))
+        has_subexpr: Optional[bool] = None
+
+        arg_iter: Iterable[ExprLike] = arg_list
+        if isinstance(arg_list, np.ndarray):
+            if isinstance(arg_list, NDVarArray):
+                has_subexpr = arg_list.has_subexpr()
+            arg_iter = arg_list.flat
+
+        # convert numpy integers to Python integers
+        args: tuple[int|Expression, ...] = npint2int(arg_iter)
+        super().__init__("max", args, has_subexpr=has_subexpr)
+
+    @property
+    def args(self) -> tuple[int|Expression, ...]:
+        """ READ-ONLY, well-typed argument of this global function, no numpy ints"""
+        return self._args
 
     def value(self) -> Optional[int]:
         """
         Returns:
             Optional[int]: The maximum value of the arguments, or None if any argument is not assigned
         """
-        vargs = [argval(a) for a in self.args]
-        if any(val is None for val in vargs):
+        vals = argvals_intexpr(self.args)
+        if vals is None:
             return None
 
-        return max(vargs)
+        return max(vals)
 
     def decompose(self) -> tuple[Expression, list[Expression]]:
         """
@@ -244,8 +273,8 @@ class Maximum(GlobalFunction):
         Returns:
             tuple[int, int]: A tuple of (lower bound, upper bound) for the maximum value
         """
-        bnds = [get_bounds(x) for x in self.args]
-        return max(lb for lb, ub in bnds), max(ub for lb, ub in bnds)
+        lbs, ubs = get_bounds_intexpr(self.args)
+        return max(lbs), max(ubs)
 
 
 class Abs(GlobalFunction):
@@ -258,7 +287,7 @@ class Abs(GlobalFunction):
         Arguments:
             expr (Expression): Expression of which to compute the absolute value
         """
-        super().__init__("abs", [expr])
+        super().__init__("abs", (expr,))
 
     def value(self) -> Optional[int]:
         """
@@ -450,7 +479,7 @@ class Division(GlobalFunction):
             x (ExprLike): Expression or constant to divide
             y (ExprLike): Expression or constant to divide by
         """
-        super().__init__("div", [x, y])
+        super().__init__("div", (x, y))
 
     def __repr__(self):
         """
@@ -545,7 +574,7 @@ class Modulo(GlobalFunction):
             x (ExprLike): Expression or constant for the dividend
             y (ExprLike): Expression or constant for the divisor
         """
-        super().__init__("mod", [x, y])
+        super().__init__("mod", (x, y))
 
     def __repr__(self):
         """
@@ -635,7 +664,7 @@ class Power(GlobalFunction):
             raise TypeError(f"Power constraint takes an integer number as second argument, not: {exponent}")
         if exponent < 0:
             raise ValueError(f"Power constraint only supports non-negative integer exponents, not: {exponent}")
-        super().__init__("pow", [base, exponent])
+        super().__init__("pow", (base, exponent))
 
     def decompose(self):
         """
@@ -708,7 +737,7 @@ class Element(GlobalFunction):
             raise TypeError(f"Element(arr, idx) takes an integer expression as second argument, not a list: {idx}")
         assert len(arr) > 0, "Element: array should not be empty"
 
-        super().__init__("element", [arr, idx])
+        super().__init__("element", (arr, idx))
 
     def __getitem__(self, index):
         raise CPMpyException("For using multi-dimensional Element, use comma-separated indices on the original array, e.g. instead of Arr[Idx1][Idx2], do Arr[Idx1, Idx2].")
@@ -824,7 +853,7 @@ class Count(GlobalFunction):
             raise TypeError(f"Count(arr, val) takes an array of expressions as first argument, not: {arr}")
         if is_any_list(val):
             raise TypeError(f"Count(arr, val) takes a numeric expression as second argument, not a list: {val}")
-        super().__init__("count", [arr, val])
+        super().__init__("count", (arr, val))
 
     def decompose(self) -> tuple[Expression, list[Expression]]:
         """
@@ -885,7 +914,7 @@ class Among(GlobalFunction):
             raise TypeError(f"Among takes as input two arrays, not: {arr} and {vals}")
         if any(isinstance(val, Expression) for val in vals):
             raise TypeError(f"Among takes a set of integer values as input, not {vals}")
-        super().__init__("among", [arr, vals])
+        super().__init__("among", (arr, vals))
 
     def decompose(self) -> tuple[Expression, list[Expression]]:
         """
@@ -938,7 +967,7 @@ class NValue(GlobalFunction):
         """
         if not is_any_list(arr):
             raise ValueError(f"NValue(arr) takes an array as input, not: {arr}")
-        super().__init__("nvalue", arr)
+        super().__init__("nvalue", tuple(arr))
 
     def decompose(self) -> tuple[Expression, list[Expression]]:
         """
@@ -1003,7 +1032,7 @@ class NValueExcept(GlobalFunction):
             raise ValueError("NValueExcept takes an array as input")
         if not is_num(n):
             raise ValueError(f"NValueExcept takes an integer as second argument, but got {n} of type {type(n)}")
-        super().__init__("nvalue_except",[arr, n])
+        super().__init__("nvalue_except", (arr, n))
 
     def decompose(self) -> tuple[Expression, list[Expression]]:
         """
