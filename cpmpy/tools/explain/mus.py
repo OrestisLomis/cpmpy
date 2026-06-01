@@ -7,7 +7,11 @@
     - Native MUS for given solvers:
         - Exact: deletion-based MUS extraction
         - Gurobi: IIS-based MUS extraction
+<<<<<<< HEAD
         - HiGHS: IIS-based MUS extraction
+=======
+        - SCIP: IIS-based MUS extraction
+>>>>>>> upstream/feature/mus-scip
 """
 import warnings
 import numpy as np
@@ -847,7 +851,7 @@ def mus_native(soft, hard=[], solver="exact"):
 
     :param soft: soft constraints, list of expressions
     :param hard: hard constraints, optional, list of expressions
-    :param solver: which solver to use (`exact`, `gurobi` or `highs`)
+    :param solver: which solver to use (`exact`, `gurobi`, `highs`, or `scip`)
     """
     
     # get solver class
